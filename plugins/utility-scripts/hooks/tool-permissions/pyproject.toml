@@ -1,0 +1,24 @@
+[project]
+name = "tool-permissions"
+version = "0.1.0"
+description = "Regex-based allow/ask/deny PreToolUse permission hook for Claude Code."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "rable>=0.2.1",
+]
+
+[project.scripts]
+tool-permissions = "main:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["main"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+]

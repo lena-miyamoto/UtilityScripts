@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "lena-miyamoto",
+  "description": "Lena's personal Claude Code plugin marketplace.",
+  "owner": {
+    "name": "Lena M.",
+    "email": "lena.miyamoto21@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "tool-permissions",
+      "source": "./plugins/utility-scripts",
+      "description": "Regex-based allow/ask/deny PreToolUse permission hook for Claude Code.",
+      "version": "0.1.0"
+    }
+  ]
+}

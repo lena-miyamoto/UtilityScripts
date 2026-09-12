@@ -2,6 +2,17 @@
 
 Personal collection of shell scripts, Python tools, and configuration files accumulated over the years — everything from provisioning a fresh Ubuntu workstation to scraping language-learning resources off the web.
 
+## Claude Code marketplace
+
+This repo doubles as a [Claude Code plugin marketplace](https://code.claude.com/docs/en/plugin-marketplaces). It publishes the [`tool-permissions`](plugins/utility-scripts/hooks/tool-permissions/README.md) `PreToolUse` hook as the `tool-permissions` plugin:
+
+```bash
+claude plugin marketplace add lena-miyamoto/UtilityScripts
+claude plugin install tool-permissions@lena-miyamoto
+```
+
+The hook enforces a regex-based allow/ask/deny policy (schema and a full example in [`agent-templates/claude-global/permissions.json`](agent-templates/claude-global/permissions.json)) on every tool call. It requires Python 3.13+ and `uv`; on first use `uv run` provisions the virtualenv and downloads `rable` automatically.
+
 ## Highlights
 
 **[`ubuntu-setup.sh`](ubuntu-setup.sh)** is the centerpiece. It can take a fresh Ubuntu 24.04 or 26.04 install from stock desktop to a fully configured development and gaming environment in one shot. Two modes:

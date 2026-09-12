@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "permissions.schema.json",
+  "title": "Claude Code pre-tool-use permissions",
+  "description": "Policy file for the tool-permissions hook. Files are evaluated as an ordered source list, most-important first: $CLAUDE_PROJECT_DIR/.claude/permissions.local.json, then $CLAUDE_PROJECT_DIR/.claude/permissions.json, then $CLAUDE_CONFIG_DIR/permissions.json (global). The first source with any matching rule decides the call (full override); within a source the order is allow > ask > deny > default, independent of regex length. Only 'version' is required — a file may set any subset of allow/deny/ask.",
+  "type": "object",
+  "required": ["version"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema version. Must be 1."
+    },
+    "allow": { "$ref": "#/$defs/bucket" },
+    "deny": { "$ref": "#/$defs/bucket" },
+    "ask": { "$ref": "#/$defs/bucket" }
+  },
+  "$defs": {
+    "bucket": {
+      "type": "object",
+      "description": "Map of tool name (or '|'-joined file-tool group) → array of regex patterns. Empty array [] matches unconditionally. File tools (Read/Write/Edit/MultiEdit/NotebookEdit) may be grouped with '|'; non-file tools (Bash/WebSearch/WebFetch/Skill) must appear alone.",
+      "additionalProperties": { "$ref": "#/$defs/patternList" },
+      "propertyNames": {
+        "description": "Tool name. Use WebFetch (not Fetch — the hook normalises the UI alias at runtime). File tools may be '|'-joined to share a pattern list; all other tools must appear alone.",
+        "pattern": "^(Bash|WebSearch|WebFetch|Skill|(Read|Write|Edit|MultiEdit|NotebookEdit)(\\|(Read|Write|Edit|MultiEdit|NotebookEdit))*)$"
+      }
+    },
+    "patternList": {
+      "type": "array",
+      "description": "List of ECMAScript regex patterns matched against the tool's input field. Empty list [] matches the tool unconditionally regardless of input.",
+      "items": {
+        "type": "string",
+        "description": "ECMAScript regex. ~/  expands to $HOME at runtime. Match target per tool: Bash→command, Read/Edit/MultiEdit/Write→file_path, NotebookEdit→notebook_path, WebSearch→query, WebFetch→url, Skill→skill."
+      }
+    }
+  }
+}
