@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from categories import giro_categories, creditcard_categories, FALLBACK, PATTERNS
+from categories import categories, FALLBACK, PATTERNS
 
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 import argparse
 import csv
+import io
 import os
 import re
 import sys
@@ -22,11 +23,9 @@ def _compile_categories(categories):
   ]
 #end def
 
-GIRO_COMPILED = _compile_categories(giro_categories)
-CREDITCARD_COMPILED = _compile_categories(creditcard_categories)
+COMPILED = _compile_categories(categories)
 
-GIRO_DISPLAY_CATEGORIES = [(key, label) for key, label in giro_categories] + [FALLBACK]
-CREDITCARD_DISPLAY_CATEGORIES = [(key, label) for key, label in creditcard_categories] + [FALLBACK]
+DISPLAY_CATEGORIES = [(key, label) for key, label in categories] + [FALLBACK]
 
 def categorize_by_patterns(merchant, compiled_categories):
   merchant = merchant.strip()
@@ -53,8 +52,8 @@ def parse_date(value):
 
 def parse_amount(value):
   # Normalize a raw amount string to a signed Decimal. Handles thousand
-  # separators ('.'), a decimal comma (','), and an optional leading '+/-'
-  # or German trailing '-'.
+  # separators ('.') and a decimal comma (','). Only a leading '-' marks an
+  # outflow (negative); a leading '+' or no sign is an inflow.
   cleaned = value.strip().replace('.', '').replace(' ', '')
 
   if not cleaned:
@@ -69,9 +68,6 @@ def parse_amount(value):
     cleaned = cleaned[1:]
   elif cleaned.startswith('+'):
     cleaned = cleaned[1:]
-  elif cleaned.endswith('-'):
-    sign = -1
-    cleaned = cleaned[:-1]
   #end if
 
   cleaned = cleaned.replace(',', '.')
@@ -107,10 +103,74 @@ class Transaction:
   #end def
 #end class
 
+def detect_encoding(raw):
+  # Sniff the encoding from the leading bytes. BOMs are checked longest-first
+  # (UTF-32 shares the UTF-16 LE prefix), then BOM-less UTF-16 is guessed from
+  # the NUL bytes that ASCII text produces in UTF-16. Returns None when the
+  # encoding cannot be detected this way.
+  if raw.startswith(b'\xef\xbb\xbf'):
+    return 'utf-8-sig'
+  #end if
+
+  if raw.startswith(b'\xff\xfe\x00\x00') or raw.startswith(b'\x00\x00\xfe\xff'):
+    return 'utf-32'
+  #end if
+
+  if raw.startswith(b'\xff\xfe') or raw.startswith(b'\xfe\xff'):
+    return 'utf-16'
+  #end if
+
+  sample = raw[:256]
+
+  if sample:
+    odd_nuls = sample[1::2].count(0)
+    even_nuls = sample[0::2].count(0)
+    half = len(sample) // 2
+
+    if odd_nuls >= half // 2 and odd_nuls > even_nuls:
+      return 'utf-16-le'
+    #end if
+
+    if even_nuls >= half // 2 and even_nuls > odd_nuls:
+      return 'utf-16-be'
+    #end if
+  #end if
+
+  return None
+#end def
+
+def open_text(path):
+  # Read the raw bytes and decode with the detected encoding. UTF-8 and UTF-16
+  # are detected from a BOM, and BOM-less UTF-16 from its NUL-byte pattern;
+  # otherwise fall back to the single-byte Windows/Latin codepages, with
+  # latin-1 last since it decodes any byte.
+  with open(path, 'rb') as handle:
+    raw = handle.read()
+  #end with
+
+  encoding = detect_encoding(raw)
+
+  if encoding is not None:
+    try:
+      return io.StringIO(raw.decode(encoding))
+    except UnicodeDecodeError:
+      pass
+    #end try
+  #end if
+
+  for encoding in ('utf-8', 'cp1252', 'latin-1'):
+    try:
+      return io.StringIO(raw.decode(encoding))
+    except UnicodeDecodeError:
+      continue
+    #end try
+  #end for
+#end def
+
 def parse_easybank_transactions(csv_file, account_type):
   transactions = []
 
-  with open(csv_file, 'r') as csv_file_handle:
+  with open_text(csv_file) as csv_file_handle:
     for line in csv_file_handle:
       normalized_line = line.strip()
 
@@ -157,7 +217,7 @@ def parse_sparkasse_transactions(csv_file):
   # filename, e.g. "AT000000000000000000_2025-01-01_2026-07-31.csv".
   account_number = os.path.basename(csv_file).split('_', 1)[0]
 
-  with open(csv_file, 'r', newline='') as csv_file_handle:
+  with open_text(csv_file) as csv_file_handle:
     reader = csv.reader(csv_file_handle)
     next(reader, None)  # skip the header row
 
@@ -194,20 +254,15 @@ def categorize_easybank_giro(transaction):
     return None
   #end if
 
-  return categorize_by_patterns(transaction.merchant, GIRO_COMPILED)
+  return categorize_by_patterns(transaction.merchant, COMPILED)
 #end def
 
 def categorize_easybank_creditcard(transaction):
-  if not transaction.minus:
-    print(f'Uncatalogued transaction type: {transaction.merchant}')
-    return None
-  #end if
-
-  return categorize_by_patterns(transaction.merchant, CREDITCARD_COMPILED)
+  return categorize_by_patterns(transaction.merchant, COMPILED)
 #end def
 
 def categorize_sparkasse(transaction):
-  return categorize_by_patterns(transaction.merchant, GIRO_COMPILED)
+  return categorize_by_patterns(transaction.merchant, COMPILED)
 #end def
 
 @dataclass
@@ -226,17 +281,17 @@ SOURCES = {
     key='easybank-giro',
     display_name='Giro',
     parse=lambda csv_file: parse_easybank_transactions(csv_file, 'giro'),
-    is_expense=lambda transaction: transaction.kind.startswith('Bezahlung Karte') or transaction.kind.startswith('EINZUGSBETRAG'),
+    is_expense=lambda transaction: transaction.minus and (transaction.kind.startswith('Bezahlung Karte') or transaction.kind.startswith('EINZUGSBETRAG')),
     categorize=categorize_easybank_giro,
-    categories=GIRO_DISPLAY_CATEGORIES,
+    categories=DISPLAY_CATEGORIES,
   ),
   'easybank-creditcard': Source(
     key='easybank-creditcard',
     display_name='Creditcard',
     parse=lambda csv_file: parse_easybank_transactions(csv_file, 'creditcard'),
-    is_expense=lambda transaction: not transaction.kind.startswith('EINZUGSBETRAG'),
+    is_expense=lambda transaction: transaction.minus,
     categorize=categorize_easybank_creditcard,
-    categories=CREDITCARD_DISPLAY_CATEGORIES,
+    categories=DISPLAY_CATEGORIES,
   ),
   'sparkasse': Source(
     key='sparkasse',
@@ -244,7 +299,7 @@ SOURCES = {
     parse=parse_sparkasse_transactions,
     is_expense=lambda transaction: transaction.minus,
     categorize=categorize_sparkasse,
-    categories=GIRO_DISPLAY_CATEGORIES,
+    categories=DISPLAY_CATEGORIES,
     include_account_number=True,
   ),
 }
@@ -273,6 +328,7 @@ def print_regex_entries(patterns):
 
 def print_new_merchants(accounts):
   merchants = []
+  empty_merchants = []
 
   for name, expenses, categories in accounts:
     for month_transactions in expenses.get('new', {}).values():
@@ -281,18 +337,27 @@ def print_new_merchants(accounts):
 
         if merchant:
           merchants.append(merchant)
+        else:
+          empty_merchants.append(transaction)
         #end if
       #end for
     #end for
   #end for
 
-  if not merchants:
-    return
+  if empty_merchants:
+    total = sum((transaction.amount for transaction in empty_merchants), Decimal(0))
+    print()
+    print(f'# {len(empty_merchants)} transaction(s) with empty merchant (no Partnername): {total} EUR')
+    for transaction in sorted(empty_merchants, key=lambda transaction: transaction.transaction_date):
+      print(f'  {transaction.transaction_date}  {transaction.amount} EUR')
+    #end for
   #end if
 
-  print()
-  print('# New merchants (unrecognized) - regex-escaped, ready to paste into a category list:')
-  print_regex_entries([regex_escape(merchant) for merchant in merchants])
+  if merchants:
+    print()
+    print('# New merchants (unrecognized) - regex-escaped, ready to paste into a category list:')
+    print_regex_entries([regex_escape(merchant) for merchant in merchants])
+  #end if
 #end def
 
 def print_categories_sorted():
@@ -313,15 +378,8 @@ def print_categories_sorted():
   print('}')
   print()
 
-  print('giro_categories = [')
-  for key, label in giro_categories:
-    print(f'  ({key!r}, {label!r}),')
-  #end for
-  print(']')
-  print()
-
-  print('creditcard_categories = [')
-  for key, label in creditcard_categories:
+  print('categories = [')
+  for key, label in categories:
     print(f'  ({key!r}, {label!r}),')
   #end for
   print(']')
