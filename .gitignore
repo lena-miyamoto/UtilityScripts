@@ -15,9 +15,13 @@
 fstab*
 wlan-pw.txt
 wordanalyzer/output.csv
-wordanalyzer/__pycache__
 
 tmp/
 *-db/
 restored/
+__pycache__/
 node_modules/
+
+finance-tools/EASYBANK*.csv
+finance-tools/AT*.csv
+finance-tools/expenses.txt
