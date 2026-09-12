@@ -554,6 +554,26 @@ def normalize_words(words: list[str]) -> list[str]:
     return [unquote_word(w[0])] + w[1:]
 
 
+def _is_bare_function_call(words: list[str], declared: set[str]) -> bool:
+    """True if `words` is a bare invocation of a declared function.
+
+    Matches only the direct `name …` (or `X=1 name …`) form, after stripping
+    leading assignment words. Wrappers (`command`/`exec`/`builtin`/`nohup`/
+    `timeout`/`env`) do NOT count: they run an external command or change
+    execution semantics, so the inner name must still go through policy matching
+    rather than being auto-allowed as a function call.
+    """
+    if not declared or not words:
+        return False
+    w = [_strip_cr(x) for x in words]
+    i = 0
+    while i < len(w) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", w[i]):
+        i += 1
+    if i >= len(w):
+        return False
+    return unquote_word(w[i]).rsplit("/", 1)[-1] in declared
+
+
 def render_match_string(words: list[str], redirects: list[tuple[str, str]]) -> str:
     """Canonical single-space match string, redirects appended."""
     parts = list(words)
@@ -1532,6 +1552,20 @@ def prioritized_opinion(
     return None
 
 
+def matches_deny(sources: list[dict], tool_name: str, target: str) -> Optional[str]:
+    """Return the first matching deny pattern across sources, else None.
+
+    Used for declared-function calls: a deny rule on the call itself still wins
+    over the implicit function-call allow (deny > allow), but allow/ask rules are
+    ignored — a function invocation is not a tool call.
+    """
+    for source in sources:
+        pat = matches_bucket(source.get("deny", {}), tool_name, target)
+        if pat is not None:
+            return pat
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Self-protection guard
 # ---------------------------------------------------------------------------
@@ -1603,7 +1637,9 @@ def _flow_path_arg_decision(
     return Decision(op.decision, op.pattern, [display or " ".join(raw_words)])
 
 
-def _walk_for_like(node: list[Any], sources: list[dict], tool_name: str) -> list[Decision]:
+def _walk_for_like(
+    node: list[Any], sources: list[dict], tool_name: str, declared: set[str]
+) -> list[Decision]:
     out: list[Decision] = []
     kw = node[0].name
     var = node[1][1] if isinstance(node[1], list) and node[1] and node[1][0] == "word" else ""
@@ -1613,11 +1649,13 @@ def _walk_for_like(node: list[Any], sources: list[dict], tool_name: str) -> list
     pr = _flow_path_arg_decision(sources, in_words, header)
     if pr is not None:
         out.append(pr)
-    out.extend(walk(node[3], sources, tool_name))
+    out.extend(walk(node[3], sources, tool_name, declared))
     return out
 
 
-def _walk_case(node: list[Any], sources: list[dict], tool_name: str) -> list[Decision]:
+def _walk_case(
+    node: list[Any], sources: list[dict], tool_name: str, declared: set[str]
+) -> list[Decision]:
     out: list[Decision] = []
     subj = node[1]
     if isinstance(subj, list) and subj and subj[0] == "word":
@@ -1637,7 +1675,7 @@ def _walk_case(node: list[Any], sources: list[dict], tool_name: str) -> list[Dec
         if pr is not None:
             out.append(pr)
         if len(pattern_node) > 2:
-            out.extend(walk(pattern_node[2], sources, tool_name))
+            out.extend(walk(pattern_node[2], sources, tool_name, declared))
     return out
 
 
@@ -1654,7 +1692,9 @@ def _walk_cond(node: list[Any], sources: list[dict]) -> list[Decision]:
     return results
 
 
-def _walk_arith_for(node: list[Any], sources: list[dict], tool_name: str) -> list[Decision]:
+def _walk_arith_for(
+    node: list[Any], sources: list[dict], tool_name: str, declared: set[str]
+) -> list[Decision]:
     results: list[Decision] = []
     for child in node[1:-1]:
         if isinstance(child, list) and child and child[0] in ("init", "test", "step"):
@@ -1662,46 +1702,59 @@ def _walk_arith_for(node: list[Any], sources: list[dict], tool_name: str) -> lis
                 if isinstance(w_node, list) and w_node and w_node[0] == "word":
                     if _unsafe_text(w_node[1]):
                         results.append(Decision("ask", None, [w_node[1]]))
-    results.extend(walk(node[-1], sources, tool_name))
+    results.extend(walk(node[-1], sources, tool_name, declared))
     return results
 
 
-def walk(node: list[Any], sources: list[dict], tool_name: str) -> list[Decision]:
-    """In-order DFS over the AST; returns every leaf command's decision."""
+def walk(
+    node: list[Any], sources: list[dict], tool_name: str, declared: set[str]
+) -> list[Decision]:
+    """In-order DFS over the AST; returns every leaf command's decision.
+
+    `declared` accumulates function names as their definitions are walked, in
+    source order, so a later call to an earlier-defined function is not mistaken
+    for a tool call.
+    """
     if not isinstance(node, list) or not node:
         return [Decision("allow")]
     head = node[0]
     if head == "command":
-        return [evaluate_command(node, sources, tool_name)]
+        return [evaluate_command(node, sources, tool_name, declared)]
     if head in ("and", "or", "semi", "pipe", "background"):
         out: list[Decision] = []
         for child in node[1:]:
-            out.extend(walk(child, sources, tool_name))
+            out.extend(walk(child, sources, tool_name, declared))
         return out
     if head in ("subshell", "brace-group", "negation"):
-        return walk(node[1], sources, tool_name)
+        return walk(node[1], sources, tool_name, declared)
     if head == "time":
         for child in node[1:]:
             if isinstance(child, list):
-                return walk(child, sources, tool_name)
+                return walk(child, sources, tool_name, declared)
         return [Decision("allow")]
     if head in ("if", "while", "until"):
         out = []
         for child in node[1:]:
-            out.extend(walk(child, sources, tool_name))
+            out.extend(walk(child, sources, tool_name, declared))
         return out
     if head in ("for", "select"):
-        return _walk_for_like(node, sources, tool_name)
+        return _walk_for_like(node, sources, tool_name, declared)
     if head == "case":
-        return _walk_case(node, sources, tool_name)
+        return _walk_case(node, sources, tool_name, declared)
     if head == "arith-for":
-        return _walk_arith_for(node, sources, tool_name)
+        return _walk_arith_for(node, sources, tool_name, declared)
     if head in ("cond", "cond-unary"):
         return _walk_cond(node, sources)
     if head == "function":
-        return walk(node[2], sources, tool_name)
+        # Record the name before walking the body so a self-recursive call
+        # (`f() { f; }`) is also recognized. The body is still walked (and its
+        # commands vetted) exactly as before — the declaration itself is not a
+        # decision; only the body's commands are.
+        if len(node) > 1 and isinstance(node[1], str):
+            declared.add(unquote_word(node[1]))
+        return walk(node[2], sources, tool_name, declared)
     if head == "coproc":
-        return walk(node[2], sources, tool_name)
+        return walk(node[2], sources, tool_name, declared)
     if head == "arith":
         words = [
             c[1]
@@ -1716,7 +1769,7 @@ def walk(node: list[Any], sources: list[dict], tool_name: str) -> list[Decision]
 
 
 def evaluate_command(
-    node: list[Any], sources: list[dict], tool_name: str
+    node: list[Any], sources: list[dict], tool_name: str, declared: set[str]
 ) -> Decision:
     """The 10-step per-command pipeline."""
     words, redirects = _split_command(node)
@@ -1729,7 +1782,10 @@ def evaluate_command(
     if not redirects:
         bodies = extract_assignment_substitutions(words)
         if bodies is not None:
-            return evaluate(bodies, sources, tool_name)
+            # The body runs in a subshell where already-declared functions are
+            # visible, but a function defined *inside* the substitution does not
+            # leak back out — pass a copy so inner definitions stay scoped.
+            return evaluate(bodies, sources, tool_name, set(declared))
 
     norm = normalize_words(words)
     match = render_match_string(norm, redirects)
@@ -1770,8 +1826,19 @@ def evaluate_command(
                 return Decision(pr.decision, pr.pattern, [match])
             return evaluate(" ".join(inner), sources, tool_name)
 
-    # 5. Policy opinion.
-    decision = prioritized_opinion(sources, tool_name, match)
+    # 5. Policy opinion — unless this is a bare call to a function declared
+    # earlier in this command. A declared function's body was already walked and
+    # vetted at its declaration site, so its invocation is not a tool call: it
+    # is implicitly allowed rather than hitting the "unknown command → ask"
+    # default. A deny rule on the call itself still wins (deny > allow), and the
+    # structural/path guards in step 7 still apply to the call's arguments.
+    if tool_name == "Bash" and _is_bare_function_call(words, declared):
+        deny_pat = matches_deny(sources, tool_name, match)
+        decision = (
+            Decision("deny", deny_pat) if deny_pat is not None else Decision("allow")
+        )
+    else:
+        decision = prioritized_opinion(sources, tool_name, match)
 
     # 6. Implicit allows (no policy rule matched).
     if decision is None and tool_name == "Bash" and cmd_name == "sed" and is_safe_sed(norm):
@@ -1813,8 +1880,21 @@ def evaluate_command(
     return Decision(decision.decision, decision.pattern, [match])
 
 
-def evaluate(source: str, sources: list[dict], tool_name: str) -> Decision:
-    """Parse source and aggregate every leaf command's decision."""
+def evaluate(
+    source: str,
+    sources: list[dict],
+    tool_name: str,
+    declared: Optional[set[str]] = None,
+) -> Decision:
+    """Parse source and aggregate every leaf command's decision.
+
+    `declared` tracks functions defined in the source so far, so a call to a
+    declared function is not mistaken for a tool call. Callers that re-parse a
+    sub-command in a different execution context (e.g. `xargs`'s inner command)
+    pass `None` to start a fresh scope.
+    """
+    if declared is None:
+        declared = set()
     try:
         nodes = parse_command(source)
     except UnparseableCommand:
@@ -1823,7 +1903,7 @@ def evaluate(source: str, sources: list[dict], tool_name: str) -> Decision:
         return Decision("ask", None, [EMPTY_CMD])
     results: list[Decision] = []
     for node in nodes:
-        results.extend(walk(node, sources, tool_name))
+        results.extend(walk(node, sources, tool_name, declared))
     return _aggregate(results)
 
 

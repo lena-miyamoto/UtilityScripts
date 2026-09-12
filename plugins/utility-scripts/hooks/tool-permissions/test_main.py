@@ -221,6 +221,58 @@ def test_flow_function():
     assert ev("foo() { ssh host; }", src(deny={"Bash": ["^ssh"]})).decision == "deny"
 
 
+def test_flow_function_call_allowed():
+    # A call to a declared function is not a tool call: its body was already
+    # vetted, so it should not fall through to the unknown-command "ask".
+    s = src(allow={"Bash": ["^echo\\b"]})
+    assert ev("greet() { echo hi; }; greet world", s).decision == "allow"
+    assert ev("greet() { echo hi; }; greet world", s).cmds is None
+
+
+def test_flow_function_call_body_still_vetted():
+    # The declaration walks the body, so a denied body still denies the whole
+    # command even though the call itself would be auto-allowed.
+    s = src(allow={"Bash": ["^echo\\b"]}, deny={"Bash": ["^ssh"]})
+    assert ev("f() { ssh host; }; f", s).decision == "deny"
+    assert ev("f() { echo hi; }; f() { ssh host; }; f", s).decision == "deny"
+
+
+def test_flow_function_call_unsafe_arg():
+    # Auto-allow does not bypass the structural guard on the call's arguments.
+    s = src(allow={"Bash": ["^echo\\b"]})
+    assert ev("f() { echo hi; }; f $(rm -rf ~)", s).decision == "ask"
+
+
+def test_flow_function_call_deny_name_wins():
+    # A deny rule on the call itself still beats the implicit function-call allow.
+    s = src(allow={"Bash": ["^echo\\b"]}, deny={"Bash": ["^evil$"]})
+    assert ev("evil() { echo hi; }; evil", s).decision == "deny"
+
+
+def test_flow_function_call_wrapper_not_bare():
+    # `command f` runs an external command, not the function — no auto-allow.
+    s = src(allow={"Bash": ["^echo\\b"]})
+    assert ev("f() { echo hi; }; command f", s).decision == "ask"
+
+
+def test_flow_function_call_path_arg_guard():
+    # The call's arguments still get path-argument checking.
+    s = src(allow={"Bash": ["^echo\\b"]}, deny={"Read": [f"^{HOME_RE}/\\.ssh/.*$"]})
+    assert ev("f() { echo hi; }; f ~/.ssh/id_rsa", s).decision == "deny"
+
+
+def test_flow_function_nested_and_recursive():
+    s = src(allow={"Bash": ["^echo\\b"]})
+    assert ev("outer() { inner() { echo hi; }; inner; }; outer", s).decision == "allow"
+    assert ev("f() { echo hi; f; }", s).decision == "allow"
+
+
+def test_flow_function_call_before_def_asks():
+    # Source order matters: a call before the declaration is not a function call.
+    s = src(allow={"Bash": ["^echo\\b"]})
+    assert ev("f; f() { echo hi; }", s).decision == "ask"
+
+
 def test_flow_coproc():
     assert ev("coproc x { ssh host; }", src(deny={"Bash": ["^ssh"]})).decision == "deny"
 

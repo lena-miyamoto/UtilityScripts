@@ -195,6 +195,35 @@ no rule matches it, and it is no longer unsafe after the quirk fix below. Flow
 keywords are still **not** configurable via `permissions.json` — they do not
 appear in any bucket; only the commands inside them are evaluated.
 
+**Declared function calls.** A `function` AST node (both `name() { …; }` and
+`function name { …; }`) walks its body through the normal pipeline — a denied
+command in the body still denies the whole command — and records the function
+name. A later **bare** invocation of that name (`f`, `X=1 f`) is not matched
+against policy as a tool call: it is implicitly allowed, because its body was
+already vetted at the declaration site. This keeps
+`greet() { echo hi; }; greet world` from prompting on the `greet` call. Only the
+**bare** form is exempt — wrappers that run an external command or change
+execution semantics (`command f`, `exec f`, `builtin f`, `nohup f`,
+`timeout … f`, `env … f`) still go through normal policy matching.
+
+Safety properties:
+
+- The declaration's body is **always** walked, so a function whose body is
+  denied or asks (e.g. `eval "$@"`, `"$@"`, `sh -c "$@"`, `ssh host`) still
+  denies/asks the whole command; a redefinition
+  (`f() { echo hi; }; f() { ssh host; }; f`) is caught because the second body is
+  walked.
+- A **deny** rule on the call itself still beats the implicit allow
+  (`deny > allow`).
+- The call's arguments still pass through the structural allow guard and
+  path-argument checking, so `f $(rm -rf ~)` asks and `f ~/.ssh/id_rsa` is
+  denied when that path is read-denied.
+- Scope follows source order and shell semantics: a call **before** its
+  definition is not a function call (→ ask); a function defined inside a command
+  substitution does not leak back out (the substitution body is re-evaluated
+  with a *copy* of the declared set); and `xargs f` re-evaluates `f` in a fresh
+  scope, since `xargs` runs external commands rather than the function.
+
 **Fail-closed.** Unparseable input (`ParseError`/`MatchedPairError`) → **ask**.
 Otherwise the parser is trusted: rable is a full bash parser, and bash refuses
 to execute non-round-tripping input, so a dropped word (e.g. an unclosed-quote
