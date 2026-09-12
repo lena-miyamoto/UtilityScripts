@@ -1,0 +1,19 @@
+{
+  "$schema": "~/.claude/plugins/utility-scripts/hooks/tool-permissions/permissions.schema.json",
+  "version": 1,
+  "deny": {
+    "Read|Write|Edit|MultiEdit|NotebookEdit": [
+      "(^|/)\\.env[^/]*$",
+      "\\.csv$",
+      "\\.svg$",
+      "(^|/)fstab[^/]*$",
+      "(^|/)wlan-pw\\.txt$",
+      "(^|/)expenses\\.txt$",
+      "(^|/)tmp(/|$)",
+      "(^|/)[^/]*-db(/|$)",
+      "(^|/)restored(/|$)",
+      "(^|/)__pycache__(/|$)",
+      "(^|/)node_modules(/|$)"
+    ]
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "deny": [
+      "Read(./**/.env*)",
+      "Edit(./**/.env*)",
+      "Write(./**/.env*)",
+      "MultiEdit(./**/.env*)",
+      "NotebookEdit(./**/.env*)",
+
+      "Read(./**/*.csv)",
+      "Edit(./**/*.csv)",
+      "Write(./**/*.csv)",
+      "MultiEdit(./**/*.csv)",
+      "NotebookEdit(./**/*.csv)",
+
+      "Read(./**/*.svg)",
+      "Edit(./**/*.svg)",
+      "Write(./**/*.svg)",
+      "MultiEdit(./**/*.svg)",
+      "NotebookEdit(./**/*.svg)",
+
+      "Read(./**/fstab*)",
+      "Edit(./**/fstab*)",
+      "Write(./**/fstab*)",
+      "MultiEdit(./**/fstab*)",
+      "NotebookEdit(./**/fstab*)",
+
+      "Read(./**/wlan-pw.txt)",
+      "Edit(./**/wlan-pw.txt)",
+      "Write(./**/wlan-pw.txt)",
+      "MultiEdit(./**/wlan-pw.txt)",
+      "NotebookEdit(./**/wlan-pw.txt)",
+
+      "Read(./**/expenses.txt)",
+      "Edit(./**/expenses.txt)",
+      "Write(./**/expenses.txt)",
+      "MultiEdit(./**/expenses.txt)",
+      "NotebookEdit(./**/expenses.txt)",
+
+      "Read(./**/tmp/**)",
+      "Edit(./**/tmp/**)",
+      "Write(./**/tmp/**)",
+      "MultiEdit(./**/tmp/**)",
+      "NotebookEdit(./**/tmp/**)",
+
+      "Read(./**/*-db/**)",
+      "Edit(./**/*-db/**)",
+      "Write(./**/*-db/**)",
+      "MultiEdit(./**/*-db/**)",
+      "NotebookEdit(./**/*-db/**)",
+
+      "Read(./**/restored/**)",
+      "Edit(./**/restored/**)",
+      "Write(./**/restored/**)",
+      "MultiEdit(./**/restored/**)",
+      "NotebookEdit(./**/restored/**)",
+
+      "Read(./**/__pycache__/**)",
+      "Edit(./**/__pycache__/**)",
+      "Write(./**/__pycache__/**)",
+      "MultiEdit(./**/__pycache__/**)",
+      "NotebookEdit(./**/__pycache__/**)",
+
+      "Read(./**/node_modules/**)",
+      "Edit(./**/node_modules/**)",
+      "Write(./**/node_modules/**)",
+      "MultiEdit(./**/node_modules/**)",
+      "NotebookEdit(./**/node_modules/**)"
+    ]
+  }
+}
