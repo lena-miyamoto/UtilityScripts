@@ -11,22 +11,26 @@ claude plugin marketplace add lena-miyamoto/UtilityScripts
 claude plugin install tool-permissions@lena-miyamoto
 ```
 
-The hook enforces a regex-based allow/ask/deny policy (schema and a full example in [`agent-templates/claude-global/permissions.json`](agent-templates/claude-global/permissions.json)) on every tool call. It requires Python 3.13+ and `uv`; on first use `uv run` provisions the virtualenv and downloads `rable` automatically.
+The hook enforces a regex-based allow/ask/deny policy (schema and a full example in [`agent-templates/claude-global/permissions.json`](agent-templates/claude-global/permissions.json)) on every tool call. It requires Python 3.13+ and `uv`; on first use `uv run` provisions the virtualenv and downloads `rable` automatically. The marketplace manifest lives in [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json).
 
 ## Highlights
 
-**[`ubuntu-setup.sh`](ubuntu-setup.sh)** is the centerpiece. It can take a fresh Ubuntu 24.04 or 26.04 install from stock desktop to a fully configured development and gaming environment in one shot. Two modes:
+**[`ubuntu-setup.sh`](ubuntu-setup.sh)** is the centerpiece. It can take a fresh Ubuntu 24.04 or 26.04 install from stock desktop to a fully configured development and gaming environment in one shot. Two main modes:
 
 - `--basic-setup` — the essentials (CLI tools, fonts, Flatpak, snap packages, dev toolchains)
-- `--lenas-setup` — adds Godot, Android SDK, and other personal preferences
+- `--lenas-setup` — everything in `--basic-setup` plus Godot, Java/Gradle, and other personal preferences
 
-What it sets up: Flatpak + Flatseal, GNOME Shell preferences, essential CLI tools (curl, jq, rhash, ffmpeg, imagemagick, fish, yt-dlp, eza, bat, difftastic, fd, ripgrep, fzf), system utilities (KeePassXC, File Roller, GParted), multimedia codecs, fonts (MS Core, custom), Snap apps (Discord, Spotify, Thunderbird), Flatpak apps (VLC, GIMP, Inkscape, Blender, Element, Heroic, ProtonUp-Qt, emulators), browsers (Brave, Edge, Tor), dev toolchains (Python via uv, Rust via rustup, Node via fnm, Java/Gradle), VS Code, local LLM stack (llama.cpp/Ollama, OpenCode, Claude Code), and containerized services via Podman (Open WebUI, Gitea, OpenSSH server). All downloads are checksum-verified.
+What both modes set up: Flatpak + Flatseal, GNOME Shell preferences, essential CLI tools (curl, jq, rhash, ffmpeg, imagemagick, fish, yt-dlp, eza, bat, difftastic, fd, ripgrep, fzf), system utilities (File Roller, GParted), multimedia codecs, MS Core + proprietary fonts, snap apps (Discord, Spotify, Thunderbird), Firefox ESR (apt, replaces the snap build), Flatpak apps (VLC, Cine, GIMP, Inkscape), Tor Browser, Steam + ProtonUp-Qt, dev toolchains (Python via uv, Rust via rustup, Node via fnm, VS Code), the UFW firewall, and the recommended graphics drivers. All downloads are checksum-verified.
+
+`--lenas-setup` additionally sets up: KeePassXC, Brave/Edge/Signal, Veracrypt, Podman, gaming launchers and emulators (Heroic, Azahar, Mupen64Plus), custom fonts, Blender + Element, Java/Gradle, and Godot.
+
+Standalone flags — mutually exclusive with the two modes — cover the rest: `--install-local-ai` (local LLM stack), `--install-godot`, `--install-openssh-server`, plus the `--configure-*` and `--reconfigure-*` maintenance flags. See [Quick start](#quick-start--ubuntu-setup) for the full list.
 
 ## Setup & system scripts
 
 | Script                                               | What it does                                                                                        |
 | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| [`ubuntu-setup.sh`](ubuntu-setup.sh)                 | Full Ubuntu workstation provisioning (~1784 lines)                                                  |
+| [`ubuntu-setup.sh`](ubuntu-setup.sh)                 | Full Ubuntu workstation provisioning                                                                |
 | [`manjaro-setup`](manjaro-setup)                     | Older Manjaro Linux setup script (pacman-based, less comprehensive)                                 |
 | [`install-ollama.sh`](install-ollama.sh)             | Standalone Ollama + OpenCode + Claude Code installer configured for local Qwen 2.5 Coder            |
 | [`clean-home.sh`](clean-home.sh)                     | Nuclear home directory cleanup — prompts for confirmation, preserves critical dotfiles and XDG dirs |
@@ -51,6 +55,15 @@ Python scripts for building annotated vocabulary lists across Spanish, English, 
 
 Dictionaries scraped: SpanishDict, DixOsola (ES↔DE, ES↔EN), dict.cc, German/English Wiktionary, Oxford Dictionary.
 
+## Finance tools
+
+Python scripts for parsing bank account CSV exports (easybank, Sparkasse) and grouping expenses into categories.
+
+| Script                                                                     | What it does                                                                                                                                                   |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`finance-tools/parse-kontoauszug.py`](finance-tools/parse-kontoauszug.py) | Parse easybank (Girokonto, Kreditkarte) and Sparkasse CSV exports, categorize expenses by regex, print monthly totals/averages and list unrecognized merchants |
+| [`finance-tools/categories.py`](finance-tools/categories.py)               | Category definitions — regex patterns mapped to categories (groceries, restaurants, medical, …) plus the ordered category list and fallback                    |
+
 ## Web & media tools
 
 | Script                                                               | What it does                                                                                       |
@@ -62,15 +75,6 @@ Dictionaries scraped: SpanishDict, DixOsola (ES↔DE, ES↔EN), dict.cc, German/
 | [`webp2png`](webp2png)                                               | Convert WebP to PNG (or animated APNG for multi-frame images)                                      |
 | [`fetch-instagram-post.snippet.js`](fetch-instagram-post.snippet.js) | Browser snippet — auto-advance Instagram slideshows, log image URLs                                |
 
-## Other files
-
-| File                                   | Description                                                                         |
-| -------------------------------------- | ----------------------------------------------------------------------------------- |
-| [`autoexec.cfg`](autoexec.cfg)         | CS:GO config — keybinds, crosshair, video/net settings, HUD                         |
-| [`agent-templates/`](agent-templates/) | GitHub Copilot instruction templates (global prefs + custom explorer agent)         |
-| [`.vscode/`](.vscode/)                 | VS Code workspace settings — extensions, formatters, Claude Code terminal allowlist |
-| [`.editorconfig`](.editorconfig)       | UTF-8, LF, 2-space indent, 100-char lines                                           |
-
 ## Quick start — Ubuntu setup
 
 ```bash
@@ -81,11 +85,30 @@ cd UtilityScripts
 # Generic: core tooling and apps
 ./ubuntu-setup.sh --basic-setup
 
-# Full: adds Godot, Android SDK, and personal tweaks
+# Full: adds Godot, Java/Gradle, and personal tweaks
 ./ubuntu-setup.sh --lenas-setup
 ```
 
 The script is designed to be idempotent and safe to re-run.
+
+### Options
+
+| Flag                          | Effect                                                                                  |
+| ----------------------------- | --------------------------------------------------------------------------------------- |
+| `-h`, `--help`                | Print help text and exit                                                                |
+| `--basic-setup`               | Full install — essentials only                                                          |
+| `--lenas-setup`               | Full install — everything in `--basic-setup` plus Godot, Java/Gradle, and Lena's extras |
+| `--install-local-ai`          | Local LLM stack (Node.js + Claude Code)                                                 |
+| `--install-godot`             | Godot 4.5 via Friendly Godot Version Manager (fgvm)                                     |
+| `--install-openssh-server`    | OpenSSH Server container for local testing (requires Podman 5)                          |
+| `--configure-gsettings`       | Apply the GNOME settings                                                                |
+| `--configure-lenas-gsettings` | Same, plus Lena's private extra settings                                                |
+| `--reconfigure-git`           | Reset `~/.gitconfig` and rebuild it from scratch                                        |
+| `--reconfigure-lenas-git`     | Same, plus Lena's private extra settings                                                |
+| `--reconfigure-vscode`        | Reset the VS Code config and rebuild it from scratch                                    |
+| `--reconfigure-lenas-vscode`  | Same, plus Lena's private extra settings                                                |
+
+`--basic-setup` and `--lenas-setup` are mutually exclusive. Each standalone `--install-*` flag is mutually exclusive with both modes, but combinable with the `--configure-*` / `--reconfigure-*` flags. `--install-openssh-server` also requires an existing `~/.ssh/id_ed25519.pub`.
 
 ## License
 
