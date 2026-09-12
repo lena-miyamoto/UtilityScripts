@@ -165,9 +165,9 @@ class KanjiResource(CharacterResource):
 	#end def
 #end class
 
-hiraganas = HiraganaResource('/home/heartdisease/Documents/hiragana_animated/', 'stroke_order_animation', 'gif')
-katakanas = KatakanaResource('/home/heartdisease/Documents/katakana_animated/', 'stroke_order_animation', 'gif')
-kanjis    = KanjiResource('/home/heartdisease/Documents/kanji_red/', 'red', 'png') # 'order', 'red'
+hiraganas = HiraganaResource(os.path.expanduser('~/Documents/hiragana_animated/'), 'stroke_order_animation', 'gif')
+katakanas = KatakanaResource(os.path.expanduser('~/Documents/katakana_animated/'), 'stroke_order_animation', 'gif')
+kanjis    = KanjiResource(os.path.expanduser('~/Documents/kanji_red/'), 'red', 'png') # 'order', 'red'
 
 #hiraganas.fetch_hiraganas(HiraganaResource.get_hiraganas())
 #katakanas.fetch_katakanas(KatakanaResource.get_katakanas())

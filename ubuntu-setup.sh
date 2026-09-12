@@ -905,8 +905,8 @@ function installAndroidSdk() {
     unzip "${UBUNTU_SETUP_LAST_DOWNLOADED_FILE:-}" -d ~/.local/android/sdk/.temp
 
     # TODO fix broken setup
-    # mv: cannot overwrite '/home/lena/.local/android/sdk/cmdline-tools/latest/bin': Directory not empty
-    # mv: cannot overwrite '/home/lena/.local/android/sdk/cmdline-tools/latest/lib': Directory not empty
+    # mv: cannot overwrite '~/.local/android/sdk/cmdline-tools/latest/bin': Directory not empty
+    # mv: cannot overwrite '~/.local/android/sdk/cmdline-tools/latest/lib': Directory not empty
     mkdir -p ~/.local/android/sdk/cmdline-tools/latest
     mv ~/.local/android/sdk/.temp/cmdline-tools/* ~/.local/android/sdk/cmdline-tools/latest
     rm -rf ~/.local/android/sdk/.temp
