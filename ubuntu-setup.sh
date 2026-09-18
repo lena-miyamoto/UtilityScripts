@@ -123,10 +123,10 @@ function applyGsetting() {
   local key=${2:-}
   local value=${3:-}
 
-  if gsettings list-schemas | grep -Fxq "$schema"; then
-    if gsettings list-keys "$schema" | grep -Fxq "$key"; then
-      gsettings set "$schema" "$key" "$value"
-    else
+  if gsettings set "$schema" "$key" "$value"; then
+    echo "gsettings: set $schema $key=$value"
+  elif gsettings list-schemas | grep -Fxq "$schema"; then
+    if ! gsettings list-keys "$schema" | grep -Fxq "$key"; then
       echo "[UBUNTU SETUP] Missing key for gsettings schema $schema: $key"
       exit 1
     fi
@@ -138,6 +138,8 @@ function applyGsetting() {
 
 function configureFirewall() {
   echo "[UBUNTU SETUP] Setting up UFW (Uncomplicated Firewall)..."
+  # keep SSH reachable before enabling default-deny incoming
+  sudo ufw allow OpenSSH
   # ensure firewall is active and enabled on system startup
   sudo ufw enable
   # block common HTTP(S) ports used by local webservers
@@ -158,8 +160,8 @@ function configureGnomeSettings() {
   fi
 
   echo "[UBUNTU SETUP] Adjust GNOME desktop settings..."
-  applyGsetting org.gnome.desktop.privacy search-history false
-  applyGsetting org.gnome.desktop.privacy remember-app-usage false
+  applyGsetting org.gnome.desktop.privacy remember-recent-files false
+  applyGsetting org.gnome.desktop.privacy report-technical-problems false
   applyGsetting org.gnome.desktop.privacy send-software-usage-stats false
   applyGsetting org.gnome.desktop.interface clock-format '24h'
   applyGsetting org.gnome.desktop.calendar week-start-day 'monday'
@@ -172,7 +174,6 @@ function configureGnomeSettings() {
   applyGsetting org.gnome.gedit.preferences.editor display-line-numbers true
   applyGsetting org.gnome.gedit.preferences.editor highlight-current-line true
   applyGsetting org.gnome.gedit.preferences.editor bracket-matching true
-  applyGsetting org.gnome.gedit.preferences.editor scheme 'oblivion'
   applyGsetting org.gnome.gedit.preferences.editor auto-indent true
   applyGsetting org.gnome.gedit.preferences.editor insert-spaces true
   applyGsetting org.gnome.gedit.preferences.editor tabs-size 'uint32 2'
@@ -559,14 +560,14 @@ function installCustomFonts() {
     'bad-grunge' \
     'https://dl.dafont.com/dl/?f=bad_grunge' \
     'bad-grunge.zip' \
-    '23de0f49901853029f14350e362baef5e8ee600c87d406c1192421cc53dcb38349783c69f73e24de2cd2cee23690d33c4336a9f3c499cbcce85da437a21e5f9e'
+    'f0add53663bc710e69184cb4439e9690526abe8ff762abd760456a9171585157148883e7cec198e912f1e00281b5fd4e772ea12fda065dc1517075b73e3648ac'
   installCustomFont \
     'Gunplay' \
     'opentype' \
     'gunplay' \
     'https://dl.dafont.com/dl/?f=gunplay' \
     'gunplay.zip' \
-    'db512819efc53586b0cd66bd8ecf7aa9fadccf5be41b5901e50eb6b6704a368aa6f1e07787bade6dc08610667f11c3f5503740b3327a04592ac685c65ffc8a24'
+    '572c6241fa14f9714cfa3ede481fd3afd1a8a00fb9eb87031fbd3e5eb1884a7fd352b72fa799be73ef24ec8c11f73eccef0983122298310cc10852a54daa7529'
 
   if [[ "${UBUNTU_SETUP_CUSTOM_FONT_INSTALLED:-}" == "1" ]]; then
     sudo fc-cache -fv
@@ -853,13 +854,6 @@ function installPython() {
     uv tool install ty
   else
     echo "[UBUNTU SETUP] Python and uv are already installed. Nothing to do."
-  fi
-
-  if ! command -v pdm &>/dev/null; then
-    echo "[UBUNTU SETUP] Installing Python Development Master (PDM)..."
-    downloadAndExecute https://raw.githubusercontent.com/pdm-project/pdm/main/install-pdm.py install-pdm.py 444f1f2b075f267d444ec3c28439a62ae34a85edb11595d93ac9a23e278a09751a7509be2762a9a2a53e7c7987c9cea53e14172f22bdc32bb44477c6ea8d7008
-  else
-    echo "[UBUNTU SETUP] Python Development Master (PDM) is already installed. Nothing to do."
   fi
 }
 
@@ -1241,59 +1235,6 @@ function installLlamaCpp() {
     fi
 
     llama-cli --version
-
-    # llama-server --hf-repo 'unsloth/gemma-4-E4B-it-GGUF' --hf-file 'gemma-4-E4B-it-Q4_K_M.gguf' --port 8080 \
-    #   -c 32768 \
-    #   -ngl 99 \
-    #   -fa on \
-    #   --no-mmproj \
-    #   --no-direct-io \
-    #   --cache-type-k q8_0 \
-    #   --cache-type-v q8_0 \
-    #   --jinja \
-    #   --temp 0.4 \
-    #   --top-p 0.95 \
-    #   --top-k 20 \
-    #   --presence-penalty 1.5 \
-    #   --repeat-penalty 1.0
-
-    # llama-server --hf-repo 'Jackrong/Qwen3.5-9B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF' --hf-file 'Qwen3.5-9B.Q4_K_M.gguf' --port 8080 \
-    #   -c 32768 \
-    #   -ngl 99 \
-    #   -fa on \
-    #   --no-mmproj \
-    #   --no-direct-io \
-    #   --jinja \
-    #   --temp 0.4 \
-    #   --top-p 0.95 \
-    #   --top-k 20 \
-    #   --presence-penalty 1.5 \
-    #   --repeat-penalty 1.0
-
-    # llama-server --hf-repo 'unsloth/Qwen3.5-9B-GGUF' --hf-file 'Qwen3.5-9B-Q4_K_M.gguf' --port 8080 \
-    #   -c 32768 \
-    #   -ngl 99 \
-    #   -fa on \
-    #   --no-mmproj \
-    #   --jinja \
-    #   --temp 0.6 \
-    #   --top-p 0.95 \
-    #   --top-k 20 \
-    #   --presence-penalty 1.5 \
-    #   --repeat-penalty 1.0
-    #   --chat-template-kwargs '{"enable_thinking":false}'
-
-    # llama-server --hf-repo 'bartowski/Qwen2.5-Coder-7B-Instruct-GGUF' --hf-file 'Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf' --port 8080 \
-    #   --jinja \
-    #   --no-direct-io \
-    #   --repeat-penalty 1.2 \
-    #   --temp 0.0 \
-    #   --top-p 0.95 \
-    #   --min-p 0.01 \
-    #   --top-k 40 \
-    #   -c 24576 \
-    #   -ngl 32 \
-    #   -fa on
   else
     echo "[UBUNTU SETUP] llama.cpp is already installed."
   fi
@@ -1335,7 +1276,7 @@ function installOpenCode() {
 function installClaudeCode() {
   if ! command -v claude &>/dev/null; then
     echo "[UBUNTU SETUP] Installing Claude Code..."
-    downloadAndExecute https://claude.ai/install.sh install-claude.sh c48fd1767e189e15ad6cf0293528cc55c078ff89ff25951a7cb0212e3e99792b288ea54fa33f23a54832f1c7f758551cd44f8b8ae6b4a98e6ce22ae8a1bbddac
+    downloadAndExecute https://claude.ai/install.sh install-claude.sh dbb675d60d4cd30257e5f89e8c9f10f73d920ba07c11699ebc57d1210424ae17a140ca600dd34cacf386ea08c4801817a0bb7afc7ec2a646035ff5ccc48f482d
 
     if ! [ -d ~/.claude ]; then
       mkdir ~/.claude
@@ -1370,66 +1311,24 @@ function installNodeJs() {
     echo "[UBUNTU SETUP] Fast Node Manager (fnm) is already installed."
   fi
 
-  if ! command -v node &>/dev/null || [[ "$(node -v)" != "v24."* ]]; then
-    echo "[UBUNTU SETUP] Installing and activating Node.js 24 via fnm..."
+  if ! command -v node &>/dev/null || [[ "$(node -v)" != "v26."* ]]; then
+    echo "[UBUNTU SETUP] Installing and activating Node.js 24 and 26 via fnm..."
 
     export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 
     fnm install 24 --corepack-enabled
     fnm use 24
-    #npm config set min-release-age 3
     npm install -g --allow-scripts=esbuild npm@latest pnpm@latest typescript@latest tsx@latest rimraf@latest corepack@latest
-    #pnpm config set minimum-release-age 4320 --global
 
     fnm install 26
     fnm use 26
-    #npm config set min-release-age 3
     npm install -g --allow-scripts=esbuild npm@latest pnpm@latest typescript@latest tsx@latest rimraf@latest corepack@latest
-    #pnpm config set minimum-release-age 4320 --global
     corepack enable
 
     fnm default 26
     fnm use default
-
-    # shellcheck disable=SC2016
-    local bwrapAliases='alias snpm='"'"'NPM_DIR=$(dirname $(which npm)) PROJECT_DIR=$(pwd) bwrap --unshare-all --share-net \
-  --tmpfs /tmp \
-  --tmpfs "$HOME" \
-  --ro-bind /usr /usr \
-  --ro-bind /lib /lib \
-  --ro-bind /lib64 /lib64 \
-  --ro-bind /etc/resolv.conf /etc/resolv.conf \
-  --bind $(dirname $NPM_DIR) $(dirname $NPM_DIR) \
-  --bind "$HOME/.cache/node" "$HOME/.cache/node" \
-  --bind "$FNM_DIR" "$FNM_DIR" \
-  --bind "$PROJECT_DIR" "$PROJECT_DIR" \
-  --setenv PATH "$PROJECT_DIR/node_modules/.bin:$NPM_DIR:$PATH" \
-  -- npm'"'"'
-alias spnpm='"'"'PNPM_DIR=$(dirname $(which pnpm)) PROJECT_DIR=$(pwd) bwrap --unshare-all --share-net \
-  --tmpfs /tmp \
-  --tmpfs "$HOME" \
-  --ro-bind /usr /usr \
-  --ro-bind /lib /lib \
-  --ro-bind /lib64 /lib64 \
-  --ro-bind /etc/resolv.conf /etc/resolv.conf \
-  --bind $(dirname $PNPM_DIR) $(dirname $PNPM_DIR) \
-  --bind "$HOME/.cache/node" "$HOME/.cache/node" \
-  --bind "$HOME/.cache/pnpm" "$HOME/.cache/pnpm" \
-  --bind "$HOME/.config/pnpm" "$HOME/.config/pnpm" \
-  --bind "$HOME/.local/share/pnpm" "$HOME/.local/share/pnpm" \
-  --bind "$HOME/.local/state/pnpm" "$HOME/.local/state/pnpm" \
-  --bind "$FNM_DIR" "$FNM_DIR" \
-  --bind "$PROJECT_DIR" "$PROJECT_DIR" \
-  --setenv PATH "$PROJECT_DIR/node_modules/.bin:$NPM_DIR:$PATH" \
-  -- pnpm'"'"'
-
-'
-
-    printf "%s" "$bwrapAliases" >>~/.bashrc
-    # shellcheck disable=SC2016
-    printf "%s" "$bwrapAliases" | sed 's/$(/(/g' >~/.config/fish/conf.d/bwrap-npm-config.fish
   else
-    echo "[UBUNTU SETUP] Node.js 24 is already installed via fnm, nothing to do."
+    echo "[UBUNTU SETUP] Node.js 26 is already installed via fnm, nothing to do."
   fi
 }
 
@@ -1456,7 +1355,7 @@ function installGodot() {
 function installRust() {
   if ! command -v rustup &>/dev/null; then
     echo "[UBUNTU SETUP] Installing Rust..."
-    downloadAndVerify https://sh.rustup.rs install-rustup.sh cd9fd64eabc989f19a6a16e9cd2caabe935082e2715b9308150f86d3839c99eb9a7e42a7ef6730c6d956d870638ee89a04dd9e7e14fe243cc165967b7f2918da true
+    downloadAndVerify https://sh.rustup.rs install-rustup.sh 494ddf67a104d5deb49380968ecccd8648ee0d7a3e61a8fa45b4dfd3bdc51ba8777922ed0e1864bf81ba78ce718bd40c55c1835c328df3cd1cd0d17312411460 true
     chmod +x "$UBUNTU_SETUP_LAST_DOWNLOADED_FILE"
     sh "$UBUNTU_SETUP_LAST_DOWNLOADED_FILE" -y
 
@@ -1469,7 +1368,6 @@ function installRust() {
     sudo apt install -y build-essential pkg-config libssl-dev
 
     cargo install cargo-update
-    cargo install-update --all
   else
     echo "[UBUNTU SETUP] Rust is already installed. Nothing to do."
   fi
@@ -1549,14 +1447,17 @@ function installDevTools() {
   if [[ "${UBUNTU_SETUP_LENAS_SETUP:-}" == "1" ]]; then
     installJava
     installGradle
+    installClaudeCode
+
     #installAndroidSdk
-    installGodot
+    #installGodot
   fi
 }
 
 function installGnomeShell() {
   echo "[UBUNTU SETUP] Installing gnome-shell and related utilities..."
   sudo apt install -y ubuntu-gnome-desktop gnome-shell-extension-manager gnome-browser-connector gnome-tweaks dconf-editor alacarte gnome-terminal gedit gthumb
+  gnome-extensions disable ubuntu-dock@ubuntu.com || true
   configureGnomeSettings
 }
 
@@ -1567,8 +1468,12 @@ function startUbuntuSetup() {
     echo "[UBUNTU SETUP] Starting setup for Lena <3..."
   fi
 
+  # set up UFW (Uncomplicated Firewall)
+  configureFirewall
+
   echo "[UBUNTU SETUP] Updating packages..."
   sudo apt update
+  sudo apt upgrade -y
 
   # set up the basics
   installFlatpak
@@ -1621,9 +1526,6 @@ function startUbuntuSetup() {
 
   # install dev tools
   installDevTools
-
-  # set up UFW (Uncomplicated Firewall)
-  configureFirewall
 
   # auto-install recommended graphics drivers
   sudo ubuntu-drivers install
