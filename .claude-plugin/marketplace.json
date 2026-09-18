@@ -12,6 +12,12 @@
       "source": "./plugins/utility-scripts",
       "description": "Regex-based allow/ask/deny PreToolUse permission hook for Claude Code.",
       "version": "0.2.0"
+    },
+    {
+      "name": "statusline",
+      "source": "./plugins/statusline",
+      "description": "Custom Claude Code statusline (main bar + subagent rows).",
+      "version": "0.1.0"
     }
   ]
 }

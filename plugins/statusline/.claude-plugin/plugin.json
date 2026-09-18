@@ -1,0 +1,10 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "statusline",
+  "version": "0.1.0",
+  "description": "Custom Claude Code statusline (main bar + subagent rows), stdlib-only Python.",
+  "author": {
+    "name": "Lena M.",
+    "email": "lena.miyamoto21@gmail.com"
+  }
+}

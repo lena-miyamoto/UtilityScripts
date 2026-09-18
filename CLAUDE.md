@@ -17,6 +17,7 @@ Before committing, verify no confidential values added to tracked files.
 - Do not run destructive scripts or commands without explicit user intent.
 - Shell scripts: keep current style and existing helper abstractions; don't inline one-off logic.
 - German prose or user-facing text: standard German orthography with umlauts and `ß` unless user explicitly asks for ASCII.
+- File names use kebab-case (`install-statusline.py`), not snake_case. Hyphenated Python scripts are loaded via `importlib`/`runpy`, never `import`ed by name.
 
 ## Setup Scripts
 

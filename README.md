@@ -13,6 +13,12 @@ claude plugin install tool-permissions@lena-miyamoto
 
 The hook enforces a regex-based allow/ask/deny policy (schema and a full example in [`agent-templates/claude-global/permissions.json`](agent-templates/claude-global/permissions.json)) on every tool call. It requires Python 3.13+ and `uv`; on first use `uv run` provisions the virtualenv and downloads `rable` automatically. The marketplace manifest lives in [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json).
 
+The [`statusline`](plugins/statusline/README.md) plugin ships the custom Claude Code statusline as stdlib-only Python run through `uv` — the main bottom bar (model, context bar, git branch/worktree, vim mode, rate limits, cost) plus a per-row `subagentStatusLine`. Both bars are wired into `~/.claude/settings.json` by the bundled `install-statusline` skill (a plugin cannot enable the main `statusLine` declaratively).
+
+```bash
+claude plugin install statusline@lena-miyamoto
+```
+
 ## Highlights
 
 **[`ubuntu-setup.sh`](ubuntu-setup.sh)** is the centerpiece. It can take a fresh Ubuntu 24.04 or 26.04 install from stock desktop to a fully configured development and gaming environment in one shot. Two main modes:

@@ -1,0 +1,28 @@
+[project]
+name = "statusline"
+version = "0.1.0"
+description = "Custom Claude Code statusline (main bar + subagent rows), stdlib-only Python."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+statusline = "statusline:main"
+subagent-statusline = "shared:subagent_main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["statusline", "shared", "subagent-statusline"]
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
+pythonpath = ["."]
+python_files = "test_*.py *_test.py test-*.py"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+]
