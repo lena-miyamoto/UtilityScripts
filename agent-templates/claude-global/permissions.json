@@ -27,7 +27,7 @@
     "Bash": [
       "^node --(check|version)(\\s|$)",
       "^python3? --version(\\s|$)",
-      "^python3? ~/.claude/.*/statusline/install-statusline\\.py(\\s|$)",
+      "^python3? ['\\\"]?~/.claude/plugins/cache/lena-miyamoto/(?!.*\\.\\.).*\\.py['\\\"]?(\\s|$)",
       "^pip3? (list|show|check|freeze)(\\s|$)",
       "^npm (ls|explain|view|info|outdated|audit)(?!.*\\bfix\\b)(\\s|$)",
       "^pnpm (list|why)(\\s|$)",

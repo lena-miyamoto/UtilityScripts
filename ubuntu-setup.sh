@@ -3,6 +3,8 @@ IFS=$'\n\t'
 set -euo pipefail
 shopt -s globstar nullglob
 
+SCRIPT_DIR="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
+
 function downloadAndVerify() {
   local url=${1:-}
   local fileName=${2:-}
@@ -1280,9 +1282,25 @@ function installClaudeCode() {
 
     if ! [ -d ~/.claude ]; then
       mkdir ~/.claude
-      echo '{
+      if [[ "${UBUNTU_SETUP_LENAS_SETUP:-}" == "1" ]]; then
+        cp "$SCRIPT_DIR/agent-templates/claude-global/settings.json" ~/.claude/settings.json
+        sed -i "s|<USER-HOME-DIR>|$HOME|g" ~/.claude/settings.json
+        cp "$SCRIPT_DIR/agent-templates/claude-global/permissions.json" ~/.claude/permissions.json
+        cp "$SCRIPT_DIR/agent-templates/claude-global/CLAUDE.md" ~/.claude/CLAUDE.md
+        echo "[UBUNTU SETUP] Set ANTHROPIC_AUTH_TOKEN in ~/.claude/settings.json (template leaves a placeholder)."
+      else
+        echo '{
   "env": {}
 }' | tee ~/.claude/settings.json
+      fi
+    fi
+
+    if [[ "${UBUNTU_SETUP_LENAS_SETUP:-}" == "1" ]]; then
+      claude plugin marketplace add lena-miyamoto/UtilityScripts
+      claude plugin marketplace update lena-miyamoto
+
+      claude plugin install tool-permissions@lena-miyamoto
+      claude plugin install statusline@lena-miyamoto
     fi
   else
     echo "[UBUNTU SETUP] Claude Code is already installed."
