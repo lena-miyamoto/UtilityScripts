@@ -4,12 +4,13 @@ System prompt covers: tone/length, no-comments, no speculative abstractions, no 
 
 ## Hard rules
 
-- **Bash templates first, always.** Ad-hoc logic → Bash pipeline of CLI tools, not inline interpreter script (`python3 -c`, `node -e`, `perl -e`, throwaway files). Tool-permissions hook auto-evaluates Bash — transparent, cheap to approve; interpreter-script body opaque to the hook, forces hand-review. Python/Node only when Bash can't express it.
+- **Bash templates first, always.** Ad-hoc logic → Bash pipeline of CLI tools, not inline interpreter script (`python3 -c`, `node -e`, `perl -e`, throwaway files). Tool-permissions hook auto-evaluates Bash — transparent, cheap to approve; interpreter-script body opaque, forces hand-review. Python/Node only when Bash can't express it.
 - `WebFetch` fails → retry with `wget`/`curl`, prefer `wget` if available.
 - Never invoke tools by absolute path (`/usr/local/bin/uv`). Always use bare command, rely on `PATH` (`uv`).
 - No force-push `main`/`master`/shared branches, no `--no-verify`, no amend pushed commits.
 - Verify real app before claiming fix works. Cannot run → say so, not fake success.
 - `~/` = home dir (`$HOME` on macOS/Linux, `%USERPROFILE%` on Windows). Resolve to absolute path — never pass `~/...` to any tool.
+- **Never print the environment to model context.** `env`, `export -p`, `printenv`, `set`, `declare -p` dump secrets (`ANTHROPIC_AUTH_TOKEN`, tokens). Probe scrubbed instead: `env -i`, `env -u VAR`, or a controlled value (`X=1; export -p X`). Filter/redact output (`grep -E '^VAR='`, `sed 's/=.*/=<redacted>/'`, `wc -l`) rather than dumping.
 
 ## Communication
 
@@ -28,7 +29,7 @@ System prompt covers: tone/length, no-comments, no speculative abstractions, no 
 - **Reproduce first**: failing test, repro script, UI steps. No fix without repro unless trivial.
 - **Deictic references** ("this file", "this script", "in here", etc.) → IDE's active file, passed as context.
 - **Ambiguous intent** where wrong guess wastes work → `AskUserQuestion` first. Batch independent questions in one call.
-- **Sequential edits to the same file** → re-read with Read between calls. First edit changes file on disk; subsequent `old_string` must match updated content, not original snapshot.
+- **Sequential edits to the same file** → re-read with Read between calls. First edit changes file on disk; later `old_string` must match updated content, not original.
 - **Large features** → interview via `AskUserQuestion` before code.
 - **Multi-file / unfamiliar / unclear scope** → Plan mode. Skip for one-line fixes, read-only work, single-purpose scripts, mechanical renames.
 - **3+ unfamiliar files** → dispatch `explorer` sub-agent (if configured). Skip trivial config edits.
