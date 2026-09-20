@@ -622,6 +622,26 @@ def _extract_subst_body(rhs: str) -> Optional[str]:
     return None
 
 
+def _is_assignment_only(words: list[str]) -> bool:
+    """True if `words` is a pure assignment command with no command name.
+
+    Matches `ids="$1"`, `X=1`, and `export X=1` / `local -a X=1` (an optional
+    assignment-modifier keyword plus short flags, then only `NAME=…` words).
+    Returns False for a bare modifier (`export` alone — prints the environment,
+    like `env`) and for any real command name (`env`, `timeout`, `rm`).
+    """
+    toks = [_strip_cr(x) for x in words]
+    if not toks:
+        return False
+    if toks[0] in ASSIGNMENT_MODIFIERS:
+        toks = toks[1:]
+        while toks and re.fullmatch(r"-[a-zA-Z]+", toks[0]):
+            toks = toks[1:]
+    return bool(toks) and all(
+        re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", w) for w in toks
+    )
+
+
 def extract_assignment_substitutions(words: list[str]) -> Optional[str]:
     """Return the `$(…)` bodies of pure assignment words, or None if not applicable.
 
@@ -1786,6 +1806,14 @@ def evaluate_command(
             # visible, but a function defined *inside* the substitution does not
             # leak back out — pass a copy so inner definitions stay scoped.
             return evaluate(bodies, sources, tool_name, set(declared))
+
+    # 2b. Pure assignment command (`ids="$1"`, `export X=1`) — no command name,
+    # so nothing external runs. Allow it unless a substitution or write-redirect
+    # hazard remains (the single-`$(…)` form was already recursed in step 2).
+    if _is_assignment_only(words):
+        if unsafe_construct(words, redirects):
+            return Decision("ask", None, [render_match_string(words, redirects)])
+        return Decision("allow")
 
     norm = normalize_words(words)
     match = render_match_string(norm, redirects)

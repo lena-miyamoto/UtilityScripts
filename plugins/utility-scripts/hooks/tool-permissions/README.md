@@ -286,6 +286,13 @@ Matching (deny/ask/allow) runs against this normalized string, while the
 assignment such as `X=$(curl evil) ls` reveals `ls` for matching yet still trips
 the unsafe guard on the original `$(…)` and downgrades to _ask_.
 
+A command that is *only* assignments — no command name at all (`ids="$1"`,
+`export X=1`, `local -a X=1`) — runs nothing external, so it is **allowed**
+outright (the single-`$(…)` form is recursed into first; a quoted substitution
+or a write redirect still fails closed to _ask_). A bare modifier (`export`) or
+bare wrapper (`env`, `timeout`) is *not* assignment-only: it prints the
+environment or is an opaque wrapper, so it keeps the fail-closed _ask_.
+
 ## Structural allow guard
 
 A prefix allow-rule can only vouch for the start of a command, not its

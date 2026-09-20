@@ -440,6 +440,49 @@ def test_assignment_recursion_no_redirect():
     assert ev("X=$(git push) > /dev/null", src(deny={"Bash": ["^git push"]})).decision == "ask"
 
 
+def test_is_assignment_only():
+    assert main._is_assignment_only(['ids="$1"'])
+    assert main._is_assignment_only(["X=1"])
+    assert main._is_assignment_only(["export", "X=1"])
+    assert main._is_assignment_only(["local", "-a", "X=1"])
+    # a real command name (even a wrapper) is not assignment-only
+    assert not main._is_assignment_only(["env"])
+    assert not main._is_assignment_only(["env", "FOO=1"])
+    assert not main._is_assignment_only(["rm", "-rf", "~"])
+    # a bare modifier prints the environment -> not assignment-only
+    assert not main._is_assignment_only(["export"])
+    assert not main._is_assignment_only([])
+
+
+def test_assignment_only_allowed():
+    # a bare assignment runs nothing external -> allow, and never emits an
+    # empty match line in the ask prompt.
+    assert ev('ids="$1"').decision == "allow"
+    assert ev("X=1").decision == "allow"
+    assert ev("export X=1").decision == "allow"
+    # a quoted command substitution still fails closed to ask.
+    assert ev('X="$(foo)"').decision == "ask"
+    # a write redirect on an otherwise assignment-only command is still a write.
+    assert ev("X=1 > file").decision == "ask"
+    # a safe redirect target stays allow.
+    assert ev("X=1 > /dev/null").decision == "allow"
+
+
+def test_assignment_line_not_in_prompt():
+    # Regression: the assignment `ids="$1"` inside a function body used to
+    # normalize to an empty command and surface as a blank "" line in the ask
+    # prompt. It must be dropped, leaving only the real sub-commands.
+    cmd = 'fetch() { ids="$1"; curl -s "https://example.com/?id=$ids" | jq -r .; }\n'
+    cmd += 'echo "=== X ==="; fetch "1"'
+    r = ev(cmd)
+    assert "" not in r.cmds
+    assert r.cmds == [
+        'curl -s "https://example.com/?id=$ids"',
+        "jq -r .",
+        'echo "=== X ==="',
+    ]
+
+
 # ---------------------------------------------------------------------------
 # 9. Canonical match strings
 # ---------------------------------------------------------------------------
