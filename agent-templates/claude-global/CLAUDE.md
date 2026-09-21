@@ -4,7 +4,8 @@ System prompt covers: tone/length, no-comments, no speculative abstractions, no 
 
 ## Hard rules
 
-- **Bash templates first, always.** Ad-hoc logic → Bash pipeline of CLI tools, not inline interpreter script (`python3 -c`, `node -e`, `perl -e`, throwaway files). Tool-permissions hook auto-evaluates Bash — transparent, cheap to approve; interpreter-script body opaque, forces hand-review. Python/Node only when Bash can't express it.
+- **Bash templates first, always.** Ad-hoc logic → Bash pipeline of CLI tools, not inline interpreter (`python3 -c`, `node -e`, `perl -e`, throwaway files). Tool-permissions hook auto-evaluates Bash — transparent, cheap to approve; interpreter body opaque, forces review. Python/Node only when Bash can't express it.
+- **Write redirects: literal safe path, not a variable.** Hook parses statically — can't resolve `$VAR` in `> "$BODY"` / `>> "$BODY"`, so variable redirect target = write-op escape, forces prompt even for allow-listed `awk`/`printf`. Redirect to literal path hook recognizes as safe (`/dev/null`, `/tmp/…`, `~/.claude/tmp/…`), not a variable.
 - `WebFetch` fails → retry with `wget`/`curl`, prefer `wget` if available.
 - Never invoke tools by absolute path (`/usr/local/bin/uv`). Always use bare command, rely on `PATH` (`uv`).
 - No force-push `main`/`master`/shared branches, no `--no-verify`, no amend pushed commits.
