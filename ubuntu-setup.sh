@@ -1300,7 +1300,10 @@ function installClaudeCode() {
       claude plugin marketplace update lena-miyamoto
 
       claude plugin install tool-permissions@lena-miyamoto
+      claude plugin update tool-permissions@lena-miyamoto
+
       claude plugin install statusline@lena-miyamoto
+      claude plugin update statusline@lena-miyamoto
     fi
   else
     echo "[UBUNTU SETUP] Claude Code is already installed."
