@@ -1028,7 +1028,73 @@ def test_read_rule_opinion_two_pass():
 
 
 # ---------------------------------------------------------------------------
-# 17. Defaults, WebFetch anchoring, Fetch alias, invalid regex
+# 17. WebFetch URL delegation for wget/curl
+# ---------------------------------------------------------------------------
+
+
+ANTHROPIC = "^https://([a-zA-Z0-9-]+\\.)*anthropic\\.com(:\\d+)?(/|$)"
+MARXISTS = "^https://www\\.marxists\\.org(/|$)"
+
+
+def test_web_fetch_wget_stdout_allow():
+    s = src(allow={"WebFetch": [MARXISTS]})
+    cmd = 'wget -qO- --timeout=60 --user-agent="Mozilla/5.0" "https://www.marxists.org/subject/africa/fanon/index.htm"'
+    assert ev(cmd, s).decision == "allow"
+
+
+def test_web_fetch_curl_allow():
+    assert ev("curl https://anthropic.com/docs", src(allow={"WebFetch": [ANTHROPIC]})).decision == "allow"
+
+
+def test_web_fetch_no_url_ask():
+    # no URL -> falls through to the blanket curl/wget ask.
+    assert ev("curl x").decision == "ask"
+
+
+def test_web_fetch_off_list_ask():
+    s = src(allow={"WebFetch": [MARXISTS]})
+    assert ev("wget https://example.com/", s).decision == "ask"
+
+
+def test_web_fetch_body_ask():
+    s = src(allow={"WebFetch": [ANTHROPIC]})
+    assert ev("curl -d 'x' https://anthropic.com", s).decision == "ask"
+
+
+def test_web_fetch_method_override():
+    s = src(allow={"WebFetch": [ANTHROPIC]})
+    assert ev("curl -X POST https://anthropic.com", s).decision == "ask"
+    assert ev("curl -X GET https://anthropic.com", s).decision == "allow"
+
+
+def test_web_fetch_output_allowed_path():
+    s = src(allow={"WebFetch": [ANTHROPIC]})
+    assert ev("wget -O /tmp/x https://anthropic.com", s).decision == "allow"
+
+
+def test_web_fetch_output_denied_path():
+    s = src(allow={"WebFetch": [ANTHROPIC]}, deny={"Read": [f"^{HOME_RE}/\\.ssh/.*$"]})
+    assert ev("wget -O ~/.ssh/id_rsa https://anthropic.com", s).decision == "deny"
+
+
+def test_web_fetch_curl_remote_name_ask():
+    # implicit output path (-O/--remote-name) can't be protected -> ask.
+    s = src(allow={"WebFetch": [ANTHROPIC]})
+    assert ev("curl -O https://anthropic.com", s).decision == "ask"
+
+
+def test_web_fetch_webfetch_deny_crosses_over():
+    s = src(deny={"WebFetch": ["^https://evil\\.com(/|$)"]})
+    assert ev("wget https://evil.com/x", s).decision == "deny"
+
+
+def test_web_fetch_bash_deny_wins():
+    s = src(allow={"WebFetch": [ANTHROPIC]}, deny={"Bash": ["^curl"]})
+    assert ev("curl https://anthropic.com", s).decision == "deny"
+
+
+# ---------------------------------------------------------------------------
+# 18. Defaults, WebFetch anchoring, Fetch alias, invalid regex
 # ---------------------------------------------------------------------------
 
 
@@ -1060,7 +1126,7 @@ def test_invalid_regex_warns(capsys):
 
 
 # ---------------------------------------------------------------------------
-# 18. End-to-end decide() against the real global policy
+# 19. End-to-end decide() against the real global policy
 # ---------------------------------------------------------------------------
 
 
@@ -1114,6 +1180,12 @@ def test_e2e_gawk_print_allow(capsys, global_sources):
 
 def test_e2e_curl_ask(capsys, global_sources):
     assert decide_decision(capsys, global_sources, "Bash", {"command": "curl x"}) == "ask"
+
+
+def test_e2e_curl_webfetch_allowed(capsys, global_sources):
+    # anthropic.com is WebFetch-allowed in the global policy, so a plain curl
+    # fetch of it is auto-allowed despite the blanket curl ask rule.
+    assert decide_decision(capsys, global_sources, "Bash", {"command": "curl https://anthropic.com/docs"}) == "allow"
 
 
 def test_e2e_uv_run_sync_ask(capsys, global_sources):

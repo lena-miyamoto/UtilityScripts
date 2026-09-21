@@ -165,6 +165,15 @@ leak. `^https://(.*\.)?anthropic\.com` (no end anchor) also matches
 with an optional port and a `/` or string end, so a trailing `.`/`@` no longer
 matches.
 
+**`wget`/`curl` delegation:** a plain Bash fetch of a `WebFetch`-allowed URL is
+auto-allowed — `wget -qO- https://www.marxists.org/…` and `curl https://…` skip
+the blanket `^(curl|wget)\s` ask rule. Only a provably plain GET qualifies:
+request bodies (`curl -d`, `wget --post-data`), uploads (`-T`/`--upload-file`),
+method overrides (non-GET/HEAD `-X`), config/netrc/input-file flags, and wget's
+recursive/mirror/span-host flags fall through to ask. File output (`-O`/`-o`)
+is allowed but its path still goes through the normal deny/protected-path rules,
+so `wget -O ~/.ssh/id_rsa …` stays denied. A `WebFetch` deny on the URL wins.
+
 ## Bash AST evaluation
 
 `Bash` commands are parsed with rable into an s-expression AST, then walked

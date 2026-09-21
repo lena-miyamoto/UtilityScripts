@@ -728,6 +728,184 @@ def extract_xargs_arg_file(norm: list[str]) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# WebFetch URL delegation for wget/curl
+# ---------------------------------------------------------------------------
+#
+# A Bash `wget`/`curl` that is a plain GET of a URL the policy already allows
+# for `WebFetch` is auto-allowed, overriding the blanket `^(curl|wget)\s` ask
+# rule. The delegation is fail-closed: it only fires for a provably plain fetch
+# (no request body/upload, no method override, no config/netrc/input-file, no
+# recursive/mirror/host-spanning wget), and file output (`-O`/`-o`) is routed
+# through the normal deny/protected-path checks.
+
+_WEB_FETCH_URL_RE = re.compile(r"^https?://")
+
+# Flags that make the command *not* a plain fetch (rejected -> fall through).
+_CURL_REJECT_LONG = {
+    "--data", "--data-ascii", "--data-binary", "--data-raw",
+    "--data-urlencode", "--json", "--form", "--form-string",
+    "--upload-file", "--config", "--netrc", "--netrc-file",
+    "--remote-name", "--remote-header-name",
+}
+_CURL_REJECT_SHORT = set("dFTKOnJ")
+_WGET_REJECT_LONG = {
+    "--post-data", "--post-file", "--body-data", "--body-file",
+    "--method", "--input-file", "--config", "--execute",
+    "--recursive", "--mirror", "--page-requisites", "--span-hosts",
+    "--domains", "--exclude-domains", "--follow-ftp",
+}
+_WGET_REJECT_SHORT = set("rmpkKEHei")
+
+# Output flags: the target is a file/dir write -> route through path protection.
+_CURL_OUTPUT_LONG = {"--output", "--output-dir"}
+_CURL_OUTPUT_SHORT = "o"
+_WGET_OUTPUT_LONG = {"--output-document", "--directory-prefix"}
+_WGET_OUTPUT_SHORT = "OP"
+
+# curl's `-X`/`--request` is accepted only for GET/HEAD.
+_CURL_METHOD_LONG = {"--request"}
+_CURL_METHOD_SHORT = "X"
+
+# Harmless value-taking flags: their value token is consumed so it is never
+# mistaken for a URL. Not exhaustive — a missed value flag merely yields an
+# over-strict ask (its value token is a non-URL positional -> fail closed).
+_CURL_VALUE_LONG = {
+    "--header", "--user-agent", "--referer", "--user", "--max-time",
+    "--cookie", "--cookie-jar", "--range", "--time-cond", "--write-out",
+    "--cert", "--key", "--proxy", "--proxy-user", "--connect-timeout",
+}
+_CURL_VALUE_SHORT = set("HAeumbcrzw")
+_WGET_VALUE_LONG = {
+    "--user-agent", "--timeout", "--output-file", "--quota", "--accept",
+    "--reject", "--base", "--wait", "--level", "--tries",
+}
+_WGET_VALUE_SHORT = set("oUTQARBlw")
+
+
+def _analyze_web_fetch(norm: list[str]) -> Optional[tuple[list[str], list[str]]]:
+    """Classify a normalized wget/curl as a plain fetch -> (urls, output_paths).
+
+    Returns None (fail closed -> caller falls through to normal matching) when
+    the command is not a provably plain fetch of one or more URLs.
+    """
+    name = _cmd_name(norm)
+    if name not in ("wget", "curl"):
+        return None
+    curl = name == "curl"
+    reject_long = _CURL_REJECT_LONG if curl else _WGET_REJECT_LONG
+    reject_short = _CURL_REJECT_SHORT if curl else _WGET_REJECT_SHORT
+    output_long = _CURL_OUTPUT_LONG if curl else _WGET_OUTPUT_LONG
+    output_short = _CURL_OUTPUT_SHORT if curl else _WGET_OUTPUT_SHORT
+    value_long = _CURL_VALUE_LONG if curl else _WGET_VALUE_LONG
+    value_short = _CURL_VALUE_SHORT if curl else _WGET_VALUE_SHORT
+    method_long = _CURL_METHOD_LONG if curl else set()
+    method_short = _CURL_METHOD_SHORT if curl else ""
+
+    urls: list[str] = []
+    output_paths: list[str] = []
+    toks = norm[1:]
+    i = 0
+    n = len(toks)
+    while i < n:
+        w = unquote_word(toks[i])
+        if w == "--":
+            i += 1
+            continue
+        if w.startswith("--"):
+            flag, eq, val = w.partition("=")
+            if flag in reject_long:
+                return None
+            if flag in method_long:
+                method = val if eq else (toks[i + 1] if i + 1 < n else "")
+                if method not in ("GET", "HEAD"):
+                    return None
+                i += 1 if eq else 2
+                continue
+            if flag in output_long:
+                target = val if eq else (toks[i + 1] if i + 1 < n else None)
+                if target is None:
+                    return None
+                if target != "-":
+                    output_paths.append(target)
+                i += 1 if eq else 2
+                continue
+            if curl and flag == "--url":
+                target = val if eq else (toks[i + 1] if i + 1 < n else None)
+                if target is None:
+                    return None
+                urls.append(target)
+                i += 1 if eq else 2
+                continue
+            if flag in value_long:
+                i += 1 if eq else 2
+                continue
+            # Unknown long flag -> fail closed.
+            return None
+        if w.startswith("-") and w != "-":
+            body = w[1:]
+            j = 0
+            while j < len(body):
+                c = body[j]
+                rest = body[j + 1 :]
+                if c in reject_short:
+                    return None
+                if c in method_short:
+                    method = rest if rest else (toks[i + 1] if i + 1 < n else "")
+                    if method not in ("GET", "HEAD"):
+                        return None
+                    if not rest:
+                        i += 1
+                    break
+                if c in output_short:
+                    target = rest if rest else (toks[i + 1] if i + 1 < n else None)
+                    if target is None:
+                        return None
+                    if target != "-":
+                        output_paths.append(target)
+                    if not rest:
+                        i += 1
+                    break
+                if c in value_short:
+                    if not rest:
+                        i += 1
+                    break
+                j += 1
+            i += 1
+            continue
+        if _WEB_FETCH_URL_RE.match(w):
+            urls.append(w)
+        else:
+            return None
+        i += 1
+    return (urls, output_paths) if urls else None
+
+
+def evaluate_web_fetch(norm: list[str], sources: list[dict]) -> Optional[Decision]:
+    """Auto-allow a plain wget/curl fetch of WebFetch-allowed URLs.
+
+    Returns a Decision to override the blanket wget/curl ask, or None to fall
+    through to normal Bash matching. A WebFetch deny on any URL wins, as do the
+    deny/ask rules on any `-O`/`-o` output path.
+    """
+    analysis = _analyze_web_fetch(norm)
+    if analysis is None:
+        return None
+    urls, output_paths = analysis
+    for u in urls:
+        op = prioritized_opinion(sources, "WebFetch", u)
+        if op is None or op.decision == "ask":
+            return None  # off-list / explicit ask -> fall through
+        if op.decision == "deny":
+            return Decision("deny", op.pattern, [u])
+    for p in output_paths:
+        abs_p = os.path.abspath(expand_tilde_in_arg(p))
+        op = read_rule_opinion_for_paths(sources, [abs_p])
+        if op is not None:
+            return Decision(op.decision, op.pattern, [p])
+    return Decision("allow")
+
+
+# ---------------------------------------------------------------------------
 # sed safety (direct port of the TS state machine)
 # ---------------------------------------------------------------------------
 
@@ -1867,6 +2045,17 @@ def evaluate_command(
         )
     else:
         decision = prioritized_opinion(sources, tool_name, match)
+
+    # 5b. WebFetch URL delegation for plain wget/curl fetches (overrides the
+    # blanket `^(curl|wget)\s` ask; a Bash deny still wins).
+    if (
+        tool_name == "Bash"
+        and cmd_name in {"wget", "curl"}
+        and (decision is None or decision.decision != "deny")
+    ):
+        wf = evaluate_web_fetch(norm, sources)
+        if wf is not None:
+            decision = wf
 
     # 6. Implicit allows (no policy rule matched).
     if decision is None and tool_name == "Bash" and cmd_name == "sed" and is_safe_sed(norm):
