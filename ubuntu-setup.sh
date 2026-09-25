@@ -429,7 +429,7 @@ function installEssentials() {
 function installCommandlineBasics() {
   echo "[UBUNTU SETUP] Install basic command line utilities..."
   sudo apt install -y libsecret-tools mesa-utils \
-    fish net-tools plocate rhash pwgen \
+    fish net-tools cifs-utils plocate rhash pwgen \
     unzip zstd tar bzip2 xz-utils brotli rar unrar p7zip-full \
     ffmpeg imagemagick optipng pdftk-java libimage-exiftool-perl \
     texlive-latex-base texlive-latex-recommended texlive-fonts-recommended texlive-latex-extra texlive-extra-utils texlive-xetex
@@ -453,7 +453,8 @@ function installSystemUtils() {
     application/x-xz \
     application/zstd \
     application/vnd.rar; do
-    echo xdg-mime default org.gnome.FileRoller.desktop "$mime"
+    echo 'xdg-mime default org.gnome.FileRoller.desktop '"$mime"
+    xdg-mime default org.gnome.FileRoller.desktop "$mime"
   done
 }
 
