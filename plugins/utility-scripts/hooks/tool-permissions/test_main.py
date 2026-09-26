@@ -831,6 +831,170 @@ def test_path_arg_redirect_target():
     assert ev(f"cat <<< {HOME}/.ssh/id_rsa", s).decision == "allow"
 
 
+def test_operand_roles_table():
+    # Destination-last commands: sources are inputs, the last operand is output.
+    assert main._operand_roles("cp", ["a", "b"], None) == [(True, False), (False, True)]
+    assert main._operand_roles("install", ["a", "b"], None) == [(True, False), (False, True)]
+    assert main._operand_roles("ln", ["a", "b"], None) == [(True, False), (False, True)]
+    assert main._operand_roles("rsync", ["a", "b", "c"], None) == [
+        (True, False), (True, False), (False, True),
+    ]
+    # mv sources are read *and* removed; -t moves the destination index.
+    assert main._operand_roles("mv", ["a", "b"], None) == [(True, True), (False, True)]
+    assert main._operand_roles("mv", ["dest", "src"], 0) == [(False, True), (True, True)]
+    # All-output commands (write/create/delete): every operand is output.
+    for name in ("rm", "rmdir", "unlink", "truncate", "shred", "mkdir"):
+        assert main._operand_roles(name, ["a", "b"], None) == [(False, True), (False, True)], name
+    # Output-via-flag commands: the flag value is the output, the rest inputs.
+    for name in ("pandoc", "mutool", "yt-dlp", "unzip"):
+        assert main._operand_roles(name, ["in", "out"], None) == [(True, False), (True, False)], name
+        assert main._operand_roles(name, ["in", "out"], 1) == [(True, False), (False, True)], name
+    # First-input-second-output commands.
+    assert main._operand_roles("pdftotext", ["in"], None) == [(True, False)]
+    assert main._operand_roles("pdftotext", ["in", "out"], None) == [(True, False), (False, True)]
+    assert main._operand_roles("tesseract", ["in", "out"], None) == [(True, False), (False, True)]
+    # Read-only default, and sed -i flips operands to output.
+    assert main._operand_roles("grep", ["a", "b"], None) == [(True, False), (True, False)]
+    assert main._operand_roles("sed", ["a"], None) == [(True, False)]
+    assert main._operand_roles("sed", ["a"], None, sed_in_place=True) == [(False, True)]
+
+
+def test_io_path_cp_dest_mutating_deny(monkeypatch):
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(allow={"Bash": ["^cp"]}, deny={"Edit": [f"^{HOME_RE}/dest$"]})
+    assert ev(f"cp {HOME}/src {HOME}/dest", s).decision == "deny"
+
+
+def test_io_path_cp_dest_read_deny_noop(monkeypatch):
+    # Writing to a path is not reading it: a Read deny on the destination does
+    # not block the copy.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(allow={"Bash": ["^cp"]}, deny={"Read": [f"^{HOME_RE}/dest$"]})
+    assert ev(f"cp {HOME}/src {HOME}/dest", s).decision == "allow"
+
+
+def test_io_path_cp_source_read_deny(monkeypatch):
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(allow={"Bash": ["^cp"]}, deny={"Read": [f"^{HOME_RE}/src$"]})
+    assert ev(f"cp {HOME}/src {HOME}/dest", s).decision == "deny"
+
+
+def test_io_path_mv_source_mutating_deny(monkeypatch):
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(allow={"Bash": ["^mv"]}, deny={"Edit": [f"^{HOME_RE}/src$"]})
+    assert ev(f"mv {HOME}/src {HOME}/dest", s).decision == "deny"
+
+
+def test_io_path_rm_mutating_deny(monkeypatch):
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(allow={"Bash": ["^rm"]}, deny={"Edit": [f"^{HOME_RE}/foo$"]})
+    assert ev(f"rm {HOME}/foo", s).decision == "deny"
+
+
+def test_io_path_rm_read_deny_noop(monkeypatch):
+    # Deleting a file is a mutation; a Read deny alone does not block it.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(allow={"Bash": ["^rm"]}, deny={"Read": [f"^{HOME_RE}/foo$"]})
+    assert ev(f"rm {HOME}/foo", s).decision == "allow"
+
+
+def test_io_path_sed_in_place_mutating_deny(monkeypatch):
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(allow={"Bash": ["^sed"]}, deny={"Edit": [f"^{HOME_RE}/foo$"]})
+    assert ev(f"sed -i 's/a/b/' {HOME}/foo", s).decision == "deny"
+
+
+def test_io_path_write_redirect_mutating_deny(monkeypatch):
+    # A write redirect to a safe path is governed by mutating rules.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(allow={"Bash": ["^cat"]}, deny={"Edit": ["^/tmp/out$"]})
+    assert ev("cat /etc/hostname > /tmp/out", s).decision == "deny"
+
+
+def test_io_path_fd_dup_redirect_not_a_path(monkeypatch):
+    # Numeric fd dups (`2>&1`, `0<&1`) and fd closes (`>&-`) are file descriptors,
+    # not file paths: a broad mutating/read deny must not fire on `/cwd/1`/`/cwd/0`.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    mut = src(allow={"Bash": ["^cat"]}, deny={"Edit": [".*"]})
+    assert ev("cat foo 2>&1", mut).decision == "allow"
+    assert ev("cat foo 0<&1", mut).decision == "allow"
+    echo = src(allow={"Bash": ["^echo"]}, deny={"Edit": [".*"]})
+    assert ev("echo hi >&1", echo).decision == "allow"
+    assert ev("echo hi >&-", echo).decision == "allow"
+    read = src(allow={"Bash": ["^cat"]}, deny={"Read": [".*"]})
+    assert ev("cat 0<&1", read).decision == "allow"
+
+
+def test_io_path_unknown_tool_read_only(monkeypatch):
+    # Unknown commands keep the conservative default: operands are inputs (Read).
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    edit = src(allow={"Bash": ["^file"]}, deny={"Edit": [f"^{HOME_RE}/foo$"]})
+    read = src(allow={"Bash": ["^file"]}, deny={"Read": [f"^{HOME_RE}/foo$"]})
+    assert ev(f"file {HOME}/foo", edit).decision == "allow"
+    assert ev(f"file {HOME}/foo", read).decision == "deny"
+
+
+def test_io_path_mkdir_mutating_deny(monkeypatch):
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(allow={"Bash": ["^mkdir"]}, deny={"Edit": [f"^{HOME_RE}/newdir$"]})
+    assert ev(f"mkdir {HOME}/newdir", s).decision == "deny"
+
+
+def test_io_path_mkdir_read_deny_noop(monkeypatch):
+    # Creating a directory is a mutation; a Read deny alone does not block it.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(allow={"Bash": ["^mkdir"]}, deny={"Read": [f"^{HOME_RE}/newdir$"]})
+    assert ev(f"mkdir {HOME}/newdir", s).decision == "allow"
+
+
+def test_io_path_pandoc_output_flag(monkeypatch):
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    edit = src(allow={"Bash": ["^pandoc"]}, deny={"Edit": [f"^{HOME_RE}/out\\.html$"]})
+    read = src(allow={"Bash": ["^pandoc"]}, deny={"Read": [f"^{HOME_RE}/in\\.md$"]})
+    # The -o/--output value is the output (mutating); the input is read.
+    assert ev(f"pandoc {HOME}/in.md -o {HOME}/out.html", edit).decision == "deny"
+    assert ev(f"pandoc {HOME}/in.md --output={HOME}/out.html", edit).decision == "deny"
+    assert ev(f"pandoc {HOME}/in.md --output {HOME}/out.html", edit).decision == "deny"
+    assert ev(f"pandoc {HOME}/in.md -o {HOME}/out.html", read).decision == "deny"
+    # A Read deny on the output does not block (the output is not read).
+    ro = src(allow={"Bash": ["^pandoc"]}, deny={"Read": [f"^{HOME_RE}/out\\.html$"]})
+    assert ev(f"pandoc {HOME}/in.md -o {HOME}/out.html", ro).decision == "allow"
+    assert ev(f"pandoc {HOME}/in.md --output {HOME}/out.html", ro).decision == "allow"
+
+
+def test_io_path_unzip_directory_flag(monkeypatch):
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(allow={"Bash": ["^unzip"]}, deny={"Edit": [f"^{HOME_RE}/extract$"]})
+    assert ev(f"unzip {HOME}/a.zip -d {HOME}/extract", s).decision == "deny"
+
+
+def test_io_path_mutool_output_flag(monkeypatch):
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(allow={"Bash": ["^mutool"]}, deny={"Edit": [f"^{HOME_RE}/out\\.pdf$"]})
+    assert ev(f"mutool convert -o {HOME}/out.pdf {HOME}/in.pdf", s).decision == "deny"
+
+
+def test_io_path_pdftotext_second_output(monkeypatch):
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    # Second positional is the output; a lone PDF is read-only.
+    edit = src(allow={"Bash": ["^pdftotext"]}, deny={"Edit": [f"^{HOME_RE}/out\\.txt$"]})
+    assert ev(f"pdftotext {HOME}/in.pdf {HOME}/out.txt", edit).decision == "deny"
+    assert ev(f"pdftotext {HOME}/in.pdf", src(allow={"Bash": ["^pdftotext"]}, deny={"Edit": [f"^{HOME_RE}/in\\.pdf$"]})).decision == "allow"
+    assert ev(f"pdftotext {HOME}/in.pdf", src(allow={"Bash": ["^pdftotext"]}, deny={"Read": [f"^{HOME_RE}/in\\.pdf$"]})).decision == "deny"
+
+
+def test_io_path_tesseract_second_output(monkeypatch):
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(allow={"Bash": ["^tesseract"]}, deny={"Edit": [f"^{HOME_RE}/outbase$"]})
+    assert ev(f"tesseract {HOME}/in.png {HOME}/outbase", s).decision == "deny"
+
+
+def test_io_path_yt_dlp_output_flag(monkeypatch):
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(allow={"Bash": ["^yt-dlp"]}, deny={"Edit": [f"^{HOME_RE}/dl/vid\\.mp4$"]})
+    assert ev(f"yt-dlp -o {HOME}/dl/vid.mp4 https://example.com", s).decision == "deny"
+
+
 # ---------------------------------------------------------------------------
 # 14. Project file ops
 # ---------------------------------------------------------------------------
@@ -879,6 +1043,41 @@ def test_project_file_op_untracked_asks(monkeypatch):
     assert main.evaluate_project_file_op(["rm", PROJ + "/foo"], [src()], PROJ) is None
 
 
+def test_project_file_op_mutating_allowlist_carves_out_untracked(monkeypatch):
+    monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: False)
+    for tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+        s = src(allow={tool: [f"^{re.escape(PROJ)}/foo$"]})
+        assert (
+            main.evaluate_project_file_op(["rm", PROJ + "/foo"], [s], PROJ).decision
+            == "allow"
+        ), tool
+
+
+def test_project_file_op_read_allowlist_does_not_carve_out(monkeypatch):
+    # A Read allow authorizes read-only access, not deletion — the untracked
+    # file still falls through to ask.
+    monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: False)
+    s = src(allow={"Read": [f"^{re.escape(PROJ)}/foo$"]})
+    assert main.evaluate_project_file_op(["rm", PROJ + "/foo"], [s], PROJ) is None
+
+
+def test_project_file_op_allowlist_does_not_cover_other_path(monkeypatch):
+    monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: False)
+    s = src(allow={"Edit": [f"^{re.escape(PROJ)}/foo$"]})
+    # `foo` is mutating-allow-listed (exempt); `bar` is not -> still asks.
+    assert main.evaluate_project_file_op(["rm", PROJ + "/foo", PROJ + "/bar"], [s], PROJ) is None
+
+
+def test_project_file_op_deny_beats_allowlist(monkeypatch):
+    monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: False)
+    s = src(
+        allow={"Edit": [f"^{re.escape(PROJ)}/foo$"]},
+        deny={"Write": [f"^{re.escape(PROJ)}/foo$"]},
+    )
+    # rm deletes `foo`, so a mutating (Write) deny beats the Edit allowlist.
+    assert main.evaluate_project_file_op(["rm", PROJ + "/foo"], [s], PROJ).decision == "deny"
+
+
 def test_project_file_op_root_delete_denied(monkeypatch):
     monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: True)
     assert main.evaluate_project_file_op(["rm", PROJ], [src()], PROJ).decision == "deny"
@@ -900,10 +1099,189 @@ def test_project_file_op_mv_target_dir_dest(monkeypatch):
     assert main.evaluate_project_file_op(
         ["mv", "--target-directory=" + PROJ, PROJ + "/a"], [src()], PROJ
     ).decision == "allow"
+    assert main.evaluate_project_file_op(
+        ["mv", "--target-directory", PROJ, PROJ + "/a"], [src()], PROJ
+    ).decision == "allow"
     # Destination index is found regardless of where the -t flag sits.
     assert main.evaluate_project_file_op(["mv", PROJ + "/a", "-t", PROJ], [src()], PROJ).decision == "allow"
     # But moving the project root as a -t SOURCE is still a root removal.
     assert main.evaluate_project_file_op(["mv", "-t", PROJ + "/sub", PROJ], [src()], PROJ).decision == "deny"
+
+
+def test_resolve_path_unit(monkeypatch):
+    base = "/work"
+    assert main._resolve_path("/abs/path", base) == "/abs/path"
+    assert main._resolve_path("/a/./b/../c", base) == "/a/c"
+    assert main._resolve_path("~/x", base) == HOME + "/x"
+    assert main._resolve_path("foo", base) == "/work/foo"
+    assert main._resolve_path("./foo", base) == "/work/foo"
+    assert main._resolve_path(".", base) == "/work"
+    assert main._resolve_path("..", base) == "/"
+    assert main._resolve_path("../foo", base) == "/foo"
+    # `~user` is delegated to expanduser (fixes the old literal-relative mis-resolve
+    # for users that exist); unknown users fall back to the base dir like before.
+    user = os.path.basename(HOME)
+    if os.path.expanduser("~" + user) != "~" + user:
+        assert main._resolve_path("~" + user + "/x", base) == HOME + "/x"
+    # Without base_dir, relative paths resolve against $CLAUDE_PROJECT_DIR.
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", base)
+    assert main._resolve_path("bar") == "/work/bar"
+    # `file:` URLs resolve to the local path they address, so they can't dodge
+    # the path guards.
+    assert main._resolve_path("file:///etc/shadow", base) == "/etc/shadow"
+    assert main._resolve_path("file://localhost/etc/shadow", base) == "/etc/shadow"
+    assert main._resolve_path("file:/etc/shadow", base) == "/etc/shadow"
+    assert main._resolve_path("file:///etc/sha%64ow", base) == "/etc/shadow"
+    assert main._resolve_path("FILE:///etc/shadow", base) == "/etc/shadow"
+    # Leading slash runs collapse to one — POSIX treats `/etc` and `//etc` as
+    # the same file, so `//` must not evade an anchored deny rule.
+    assert main._resolve_path("//etc/shadow", base) == "/etc/shadow"
+    assert main._resolve_path("file:////etc/shadow", base) == "/etc/shadow"
+
+
+def test_extract_path_args_resolves_relative(monkeypatch):
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work")
+    assert main.extract_path_args(["foo", "-flag", "./x", "..", ".", "/abs", "~/y"]) == [
+        "/work/foo", "/work/x", "/", "/work", "/abs", HOME + "/y",
+    ]
+
+
+def test_io_path_relative_operand_deny(monkeypatch):
+    # Bare relative operands (`.ssh/id_rsa`) resolve against the project dir and
+    # are checked, instead of being silently dropped.
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", HOME)
+    read = src(allow={"Bash": ["^cat"]}, deny={"Read": [f"^{HOME_RE}/\\.ssh/"]})
+    assert ev("cat .ssh/id_rsa", read).decision == "deny"
+    edit = src(allow={"Bash": ["^mkdir"]}, deny={"Edit": [f"^{HOME_RE}/\\.ssh/"]})
+    assert ev("mkdir .ssh/newdir", edit).decision == "deny"
+
+
+def test_io_path_relative_redirect_deny(monkeypatch):
+    # A relative input-redirect target resolves and is read-checked.
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", HOME)
+    read = src(allow={"Bash": ["^cat"]}, deny={"Read": [f"^{HOME_RE}/\\.ssh/"]})
+    assert ev("cat < .ssh/id_rsa", read).decision == "deny"
+
+
+def test_io_path_url_operand_not_read_as_path(monkeypatch):
+    # A URL operand is not a filesystem path: a fetch whose URL ends in `.env`
+    # must not resolve to `<cwd>/https:/…/.env` and hit the `.env` deny.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(allow={"Bash": ["^yt-dlp"]}, deny={"Read": [r"/?\.env[^/]*$"]})
+    assert ev("yt-dlp -o /tmp/v.mp4 https://example.com/.env", s).decision == "allow"
+
+
+def test_io_path_url_operand_broad_read_deny_noop(monkeypatch):
+    # A broad Read deny still must not fire on the URL operand.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(allow={"Bash": ["^yt-dlp"]}, deny={"Read": [".*"]})
+    assert ev("yt-dlp -o /tmp/v.mp4 https://example.com", s).decision == "allow"
+
+
+def test_io_path_wget_url_env_suffix_not_denied(monkeypatch):
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(allow={"Bash": ["^wget"]}, deny={"Read": [r"/?\.env[^/]*$"]})
+    assert ev("wget -O /tmp/x https://example.com/.env", s).decision == "allow"
+
+
+def test_io_path_sed_script_not_a_path(monkeypatch):
+    # The sed script (`s/a/b/`) is not a file path: a Read deny on the project
+    # dir must not resolve it to `<cwd>/s/a/b/` and deny the command.
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work")
+    s = src(allow={"Bash": ["^sed"]}, deny={"Read": ["^/work/"]})
+    assert ev("sed 's/a/b/' /tmp/f", s).decision == "allow"
+
+
+def test_io_path_sed_file_still_read_checked(monkeypatch):
+    # Skipping the script must not skip the real file operand.
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work")
+    s = src(allow={"Bash": ["^sed"]}, deny={"Read": ["^/tmp/f$"]})
+    assert ev("sed 's/a/b/' /tmp/f", s).decision == "deny"
+
+
+def test_io_path_awk_program_not_a_path(monkeypatch):
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work")
+    s = src(allow={"Bash": ["^awk"]}, deny={"Read": ["^/work/"]})
+    assert ev("awk '{print $1}' /tmp/f", s).decision == "allow"
+
+
+def test_io_path_stdin_dash_not_a_path(monkeypatch):
+    # `-` is stdin, not a path.
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work")
+    s = src(allow={"Bash": ["^cat"]}, deny={"Read": ["^/work/"]})
+    assert ev("cat -", s).decision == "allow"
+
+
+def test_extract_path_args_skips_url(monkeypatch):
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work")
+    assert main.extract_path_args(["https://example.com", "/abs", "rel"]) == [
+        "/abs",
+        "/work/rel",
+    ]
+
+
+def test_io_path_file_url_resolved_and_checked(monkeypatch):
+    # `file://` is a local path, not a remote URL: it must be resolved and the
+    # deny rules applied, not skipped like an http(s) URL.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    for cmd in ("curl file:///etc/shadow", "wget file:///etc/shadow", "yt-dlp file:///etc/shadow"):
+        s = src(allow={"Bash": [f"^{cmd.split()[0]}"]}, deny={"Read": ["^/etc/shadow$"]})
+        assert ev(cmd, s).decision == "deny", cmd
+
+
+def test_io_path_file_url_forms_and_encoding(monkeypatch):
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    deny = {"Read": ["^/etc/shadow$"]}
+    for url in ("file://localhost/etc/shadow", "file:/etc/shadow", "file:///etc/sha%64ow", "FILE:///etc/shadow"):
+        s = src(allow={"Bash": ["^curl"]}, deny=deny)
+        assert ev(f"curl {url}", s).decision == "deny", url
+
+
+def test_io_path_file_url_output_checked(monkeypatch):
+    # A `file://` destination is a write to a local path: it must hit mutating
+    # rules, not be skipped as a URL.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(allow={"Bash": ["^wget"]}, deny={"Write": ["^/etc/shadow$"]})
+    assert ev("wget -O file:///etc/shadow https://example.com", s).decision == "deny"
+
+
+def test_io_path_remote_url_still_skipped(monkeypatch):
+    # A remote scheme is still not a path: the `.env`-suffixed http URL is not
+    # read-checked, while `file://` to the same path is.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    deny = {"Read": [r"/?\.env[^/]*$"]}
+    remote = src(allow={"Bash": ["^curl"]}, deny=deny)
+    assert ev("curl https://example.com/.env", remote).decision == "allow"
+    local = src(allow={"Bash": ["^curl"]}, deny=deny)
+    assert ev("curl file:///etc/.env", local).decision == "deny"
+
+
+def test_io_path_double_slash_path_checked(monkeypatch):
+    # `//etc/shadow` addresses the same file as `/etc/shadow` on POSIX; a
+    # leading-slash run must not evade an anchored deny rule.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(allow={"Bash": ["^cat"]}, deny={"Read": ["^/etc/shadow$"]})
+    assert ev("cat //etc/shadow", s).decision == "deny"
+
+
+def test_project_file_op_relative(monkeypatch):
+    # `.`/`..`/bare relative operands resolve against the project dir.
+    monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: True)
+    assert main.evaluate_project_file_op(["rm", "."], [src()], PROJ).decision == "deny"
+    assert main.evaluate_project_file_op(["rm", ".."], [src()], PROJ) is None
+    assert main.evaluate_project_file_op(["rm", "foo"], [src()], PROJ).decision == "allow"
+    monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: False)
+    assert main.evaluate_project_file_op(["rm", "foo"], [src()], PROJ) is None
+
+
+def test_file_tool_relative_path_resolved(monkeypatch):
+    # File-tool paths (`file_path`/`notebook_path`) are resolved before matching,
+    # so a relative path hits the same absolute-path rules as an absolute one.
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", HOME)
+    read = src(deny={"Read": [f"^{HOME_RE}/\\.ssh/"]})
+    assert main._eval_non_bash([read], "Read", ".ssh/id_rsa").decision == "deny"
+    edit = src(deny={"Edit": [f"^{HOME_RE}/\\.ssh/"]})
+    assert main._eval_non_bash([edit], "Edit", ".ssh/new").decision == "deny"
 
 
 def test_git_paths_tracked(tmp_path):
@@ -1072,9 +1450,19 @@ def test_web_fetch_output_allowed_path():
     assert ev("wget -O /tmp/x https://anthropic.com", s).decision == "allow"
 
 
-def test_web_fetch_output_denied_path():
+def test_web_fetch_output_read_deny_noop():
+    # Writing the output is not reading it: a Read deny on the output path does
+    # not block the fetch (mutating rules govern `-O`/`-o`).
     s = src(allow={"WebFetch": [ANTHROPIC]}, deny={"Read": [f"^{HOME_RE}/\\.ssh/.*$"]})
+    assert ev("wget -O ~/.ssh/id_rsa https://anthropic.com", s).decision == "allow"
+    assert ev("curl -o ~/.ssh/id_rsa https://anthropic.com", s).decision == "allow"
+
+
+def test_web_fetch_output_mutating_deny():
+    # wget/curl output paths are governed by mutating (Edit/Write) rules.
+    s = src(allow={"WebFetch": [ANTHROPIC]}, deny={"Edit": [f"^{HOME_RE}/\\.ssh/.*$"]})
     assert ev("wget -O ~/.ssh/id_rsa https://anthropic.com", s).decision == "deny"
+    assert ev("curl -o ~/.ssh/id_rsa https://anthropic.com", s).decision == "deny"
 
 
 def test_web_fetch_curl_remote_name_ask():

@@ -11,7 +11,7 @@
       "name": "tool-permissions",
       "source": "./plugins/utility-scripts",
       "description": "Regex-based allow/ask/deny PreToolUse permission hook for Claude Code.",
-      "version": "0.3.0"
+      "version": "0.3.1"
     },
     {
       "name": "statusline",

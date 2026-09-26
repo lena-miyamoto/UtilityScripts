@@ -14,6 +14,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Any, Optional
+from urllib.parse import unquote, urlparse
 
 from rable import MatchedPairError, ParseError, parse
 
@@ -78,13 +79,47 @@ SAFE_SED_LONG_FLAGS = frozenset(
 
 # Commands eligible for the project-relative file-op fallback.
 PROJECT_FILE_OP_COMMANDS = {"cp", "rm", "rmdir", "mv"}
-EQUALS_FORM_VALUE_PREFIXES: dict[str, tuple[str, ...]] = {
-    "cp": ("--target-directory=",),
-    "mv": ("--target-directory=",),
-}
-SHORT_VALUE_FLAG_CHARS: dict[str, str] = {"cp": "t", "mv": "t"}
 
-MUTATING_FILE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+# Output-value flags per command: the flag's value is a written/created path (an
+# output operand), not a read input. Tuple = (equals-form prefixes `--output=…`,
+# short flag chars `-o`/bundled `-o…`, long flags with a separate value
+# `--output FILE`).
+OUTPUT_VALUE_FLAGS: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]] = {
+    "cp": (("--target-directory=",), ("t",), ("--target-directory",)),
+    "mv": (("--target-directory=",), ("t",), ("--target-directory",)),
+    "pandoc": (("--output=",), ("o",), ("--output",)),
+    "mutool": (("--output=",), ("o",), ("--output",)),
+    "yt-dlp": (("--output=",), ("o",), ("--output",)),
+    "unzip": (("--directory=",), ("d",), ("--directory",)),
+    "curl": (("--output=", "--output-dir="), ("o",), ("--output", "--output-dir")),
+    "wget": (
+        ("--output-document=", "--directory-prefix="),
+        ("O", "P"),
+        ("--output-document", "--directory-prefix"),
+    ),
+}
+
+# Commands whose LAST positional operand is the destination (output); earlier
+# operands are sources (inputs). cp/mv also support -t/--target-directory
+# (handled by _extract_all_positional_args).
+LAST_ARG_IS_OUTPUT = {"cp", "mv", "rsync", "install", "ln"}
+
+# Commands whose output is only via an output-value flag (`-o`/`-d`); every
+# other operand is an input.
+OUTPUT_FLAG_COMMANDS = {"pandoc", "mutool", "yt-dlp", "unzip", "curl", "wget"}
+
+# Commands that write/create/delete every operand (all outputs).
+ALL_OUTPUT_COMMANDS = {"rm", "rmdir", "unlink", "truncate", "shred", "mkdir"}
+
+# Commands whose FIRST positional operand is read and SECOND is written.
+FIRST_INPUT_SECOND_OUTPUT = {"pdftotext", "tesseract"}
+
+# Commands whose first positional operand is a script/program, not a file path.
+# Skipped in path-argument checks so `sed 's/a/b/'` / `awk '{…}'` aren't
+# resolved to bogus paths like `<cwd>/s/a/b/`.
+SCRIPT_FIRST_COMMANDS = {"sed", "awk", "gawk", "mawk", "nawk"}
+
+MUTATING_FILE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 FILE_TOOLS = {"Read", "Write", "Edit", "MultiEdit", "NotebookEdit"}
 
 # Redirect targets that are never treated as write-op escapes.
@@ -96,6 +131,13 @@ WRITE_REDIRECT_OPS = (">", ">>", ">|", "&>", "&>>")
 # Redirect ops whose target is not a file path (heredoc delimiter / here-string
 # content), so they are excluded from path-argument checking.
 NON_PATH_REDIRECT_OPS = ("<<", "<<-", "<<<")
+
+# Operands that are remote URLs (scheme://…), not local filesystem paths —
+# excluded from path-argument checking so `wget … https://…/foo.env` isn't
+# resolved to a bogus path like `<cwd>/https:/…/foo.env` and matched by a
+# `.env` deny rule. `file` is deliberately absent: a `file://` URL addresses
+# the local filesystem, so it must be resolved and path-checked, never skipped.
+URL_RE = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.-]*)://")
 
 # Files that editing is never auto-allowed, regardless of allow-rules. Matches
 # both the manual `~/.claude/hooks/…` deployment and the plugin-installed copy
@@ -898,8 +940,8 @@ def evaluate_web_fetch(norm: list[str], sources: list[dict]) -> Optional[Decisio
         if op.decision == "deny":
             return Decision("deny", op.pattern, [u])
     for p in output_paths:
-        abs_p = os.path.abspath(expand_tilde_in_arg(p))
-        op = read_rule_opinion_for_paths(sources, [abs_p])
+        abs_p = _resolve_path(p)
+        op = _mutating_opinion_for_paths(sources, [abs_p])
         if op is not None:
             return Decision(op.decision, op.pattern, [p])
     return Decision("allow")
@@ -1147,12 +1189,12 @@ def is_safe_sed_in_place(words: list[str], sources: list[dict]) -> bool:
                 return False
             script_seen = True
         else:
-            file_paths.append(expand_tilde_in_arg(unquote_word(w)))
+            file_paths.append(unquote_word(w))
         i += 1
     if not in_place_seen or not script_seen or not file_paths:
         return False
     for fp in file_paths:
-        abs_p = os.path.abspath(fp)
+        abs_p = _resolve_path(fp)
         op = prioritized_opinion(sources, "Edit", abs_p)
         if op is not None and op.decision != "allow":
             return False
@@ -1481,30 +1523,54 @@ def is_safe_awk(words: list[str]) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def expand_tilde_in_arg(arg: str) -> str:
-    home = os.path.expanduser("~")
-    if arg == "~":
-        return home
-    if arg.startswith("~/"):
-        return home + arg[1:]
-    return arg
+def _file_url_to_path(arg: str) -> Optional[str]:
+    """Map a `file:` URL to the local path it addresses, else None.
+
+    `file:///etc/shadow`, `file://localhost/etc/shadow`, and `file:/etc/shadow`
+    all reference the local `/etc/shadow`; resolving them keeps the path guards
+    from being dodged with a file URL (including percent-encoded forms like
+    `file:///etc/sha%64ow`).
+    """
+    if not arg.lower().startswith("file:/"):
+        return None
+    parsed = urlparse(arg)
+    if parsed.scheme.lower() != "file":
+        return None
+    return unquote(parsed.path) or None
+
+
+def _resolve_path(arg: str, base_dir: Optional[str] = None) -> str:
+    """Resolve `arg` to an absolute path (lexical, no symlink resolution).
+
+    `file:` URLs and `~`/`~user` are expanded; relative paths resolve against
+    `base_dir` (or ``$CLAUDE_PROJECT_DIR``, else the process cwd).
+    """
+    file_path = _file_url_to_path(arg)
+    if file_path is not None:
+        arg = file_path
+    expanded = os.path.expanduser(arg)
+    if os.path.isabs(expanded):
+        # POSIX treats `/etc` and `//etc` as the same path; collapse a leading
+        # slash run so anchored deny rules (`^/etc/…`) can't be dodged with `//`.
+        return re.sub(r"^/+", "/", os.path.normpath(expanded))
+    base = base_dir or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    return os.path.normpath(os.path.join(base, expanded))
+
+
+def _is_url(arg: str) -> bool:
+    """True for a remote URL scheme; `file:` is a local path, not skipped."""
+    m = URL_RE.match(arg)
+    return m is not None and m.group(1).lower() != "file"
 
 
 def extract_path_args(words: list[str]) -> list[str]:
-    """Resolve path-shaped positional words (lexical, no symlink resolution)."""
+    """Resolve positional words to absolute paths (lexical, no symlink resolution)."""
     paths: list[str] = []
     for word in words:
         arg = unquote_word(word)
-        if arg.startswith("-"):
+        if not arg or arg.startswith("-") or _is_url(arg):
             continue
-        expanded = expand_tilde_in_arg(arg)
-        if (
-            expanded.startswith("/")
-            or expanded.startswith("~")
-            or expanded.startswith("../")
-            or expanded == ".."
-        ):
-            paths.append(os.path.abspath(expanded))
+        paths.append(_resolve_path(arg))
     return paths
 
 
@@ -1524,27 +1590,69 @@ def extract_redirect_path_args(redirects: list[tuple[str, str]]) -> list[str]:
     return out
 
 
+def _opinion_for_path(
+    sources: list[dict], tools: tuple[str, ...], path: str
+) -> Optional[Decision]:
+    """deny > ask > allow > None for one path across `tools`.
+
+    Each tool is resolved with full source precedence (via `prioritized_opinion`);
+    across tools, any deny wins, then any ask, then any allow — a path is
+    protected if any tool denies/asks it.
+    """
+    targets = [path] if path.endswith("/") else [path, path + "/"]
+    best: Optional[Decision] = None
+    for tool in tools:
+        tool_op: Optional[Decision] = None
+        for t in targets:
+            op = prioritized_opinion(sources, tool, t)
+            if op is not None:
+                tool_op = op
+                break
+        if tool_op is None:
+            continue
+        if tool_op.decision == "deny":
+            return tool_op
+        if best is None or (best.decision == "allow" and tool_op.decision == "ask"):
+            best = tool_op
+    return best
+
+
+def _rule_opinion_for_paths(
+    sources: list[dict], tools: tuple[str, ...], paths: list[str]
+) -> Optional[Decision]:
+    """deny > ask > None across `paths`, each resolved against `tools`."""
+    if not paths:
+        return None
+    opinions = [_opinion_for_path(sources, tools, p) for p in paths]
+    for op in opinions:
+        if op is not None and op.decision == "deny":
+            return op
+    for op in opinions:
+        if op is not None and op.decision == "ask":
+            return op
+    return None
+
+
 def read_rule_opinion_for_paths(
     sources: list[dict], paths: list[str]
 ) -> Optional[Decision]:
     """Resolve each path as a Read target; deny > ask > None (first-path)."""
-    if not paths:
-        return None
+    return _rule_opinion_for_paths(sources, ("Read",), paths)
 
-    def read_opinion(p: str) -> Optional[Decision]:
-        targets = [p] if p.endswith("/") else [p, p + "/"]
-        for t in targets:
-            op = prioritized_opinion(sources, "Read", t)
-            if op is not None:
-                return op
-        return None
 
-    for p in paths:
-        op = read_opinion(p)
+def _mutating_opinion_for_paths(
+    sources: list[dict], paths: list[str]
+) -> Optional[Decision]:
+    """Resolve each path as a mutation (Edit/Write/…); deny > ask > None."""
+    return _rule_opinion_for_paths(sources, MUTATING_FILE_TOOLS, paths)
+
+
+def _merge_path_opinions(*ops: Optional[Decision]) -> Optional[Decision]:
+    """deny > ask > None across several (possibly None) path opinions."""
+    for op in ops:
         if op is not None and op.decision == "deny":
             return op
-    for p in paths:
-        op = read_opinion(p)
+    for op in ops:
         if op is not None and op.decision == "ask":
             return op
     return None
@@ -1567,41 +1675,144 @@ def _extract_bundled_short_value(word: str, flag_char: str) -> Optional[str]:
 
 def _extract_all_positional_args(
     after: list[str],
-    equals_prefixes: tuple[str, ...] = (),
-    short_flag_char: Optional[str] = None,
+    output_equals_prefixes: tuple[str, ...] = (),
+    output_short_chars: tuple[str, ...] = (),
+    output_long_flags: tuple[str, ...] = (),
 ) -> tuple[list[str], Optional[int]]:
     """Extract positional operands; also return the index of the first
-    target-directory value (`--target-directory=`, `-t DIR`, or a bundled
-    short form), else None."""
+    output-value operand (the value of an output flag such as
+    `--target-directory=`, `--output=`, `-t DIR`, `-o DIR`, `--output DIR`, or
+    a bundled `-oDIR` short form), else None."""
     args: list[str] = []
-    target_dir_idx: Optional[int] = None
-    pending_target_dir = False
+    output_idx: Optional[int] = None
+    pending_output = False
     end_of_flags = False
     for word in after:
         if not end_of_flags and word == "--":
             end_of_flags = True
             continue
         if not end_of_flags and word.startswith("-") and word != "-":
-            pending_target_dir = False
-            eq = next((p for p in equals_prefixes if word.startswith(p)), None)
+            pending_output = False
+            eq = next((p for p in output_equals_prefixes if word.startswith(p)), None)
             if eq is not None:
-                target_dir_idx = len(args)
+                output_idx = len(args)
                 args.append(unquote_word(word[len(eq) :]))
                 continue
-            if short_flag_char is not None:
-                bundled = _extract_bundled_short_value(word, short_flag_char)
+            bundled_found = False
+            for ch in output_short_chars:
+                bundled = _extract_bundled_short_value(word, ch)
                 if bundled is not None:
-                    target_dir_idx = len(args)
+                    output_idx = len(args)
                     args.append(unquote_word(bundled))
-                    continue
-                if word == "-" + short_flag_char:
-                    pending_target_dir = True
+                    bundled_found = True
+                    break
+            if bundled_found:
+                continue
+            if any(word == "-" + ch for ch in output_short_chars) or word in output_long_flags:
+                pending_output = True
             continue
         args.append(unquote_word(word))
-        if pending_target_dir:
-            target_dir_idx = len(args) - 1
-            pending_target_dir = False
-    return args, target_dir_idx
+        if pending_output:
+            output_idx = len(args) - 1
+            pending_output = False
+    return args, output_idx
+
+
+def _operand_roles(
+    name: str,
+    args: list[str],
+    output_idx: Optional[int],
+    sed_in_place: bool = False,
+) -> list[tuple[bool, bool]]:
+    """Per-operand (is_input, is_output) roles for `name`'s positional operands.
+
+    `args` are the unquoted operands from `_extract_all_positional_args`;
+    `output_idx` is the index of the first output-value operand within `args`
+    (the value of `-t`/`-o`/`-d`/`--output=`/…), else None.
+    """
+    n = len(args)
+    if sed_in_place:
+        return [(False, True)] * n  # sed -i: files edited in place
+    if name in ALL_OUTPUT_COMMANDS:
+        return [(False, True)] * n  # operands written/created/deleted
+    if name in LAST_ARG_IS_OUTPUT:
+        dest_idx = output_idx if output_idx is not None else n - 1
+        roles: list[tuple[bool, bool]] = []
+        for i in range(n):
+            if i == dest_idx:
+                roles.append((False, True))  # destination written
+            elif name == "mv":
+                roles.append((True, True))  # mv source: read + removed
+            else:
+                roles.append((True, False))  # source read only
+        return roles
+    if name in OUTPUT_FLAG_COMMANDS:
+        # Output only via a flag (`-o`/`-d`); every other operand is an input.
+        roles = [(True, False)] * n
+        if output_idx is not None:
+            roles[output_idx] = (False, True)
+        return roles
+    if name in FIRST_INPUT_SECOND_OUTPUT:
+        roles = []
+        for i in range(n):
+            if i == 0:
+                roles.append((True, False))  # first operand: input
+            elif i == 1:
+                roles.append((False, True))  # second operand: output
+            else:
+                roles.append((True, False))  # extras: input (conservative)
+        return roles
+    return [(True, False)] * n  # default: read-only operands
+
+
+def check_io_path_rules(
+    sources: list[dict],
+    name: str,
+    norm: list[str],
+    redirects: list[tuple[str, str]],
+) -> Optional[Decision]:
+    """Read rules for input operands, mutating rules for output operands.
+
+    Positional operands are classified per `_operand_roles`; redirects are
+    classified by op (`<` input, write ops output). deny > ask > None.
+    """
+    equals, shorts, longs = OUTPUT_VALUE_FLAGS.get(name, ((), (), ()))
+    args, output_idx = _extract_all_positional_args(norm[1:], equals, shorts, longs)
+    sed_in_place = name == "sed" and any(
+        is_sed_in_place_flag(unquote_word(w)) for w in norm[1:]
+    )
+    roles = _operand_roles(name, args, output_idx, sed_in_place)
+    inputs: list[str] = []
+    outputs: list[str] = []
+    for i, (arg, (is_input, is_output)) in enumerate(zip(args, roles)):
+        if not arg or arg == "-" or _is_url(arg):
+            continue
+        if name in SCRIPT_FIRST_COMMANDS and i == 0:
+            continue  # sed/awk script, not a file path
+        abs_p = _resolve_path(arg)
+        if is_input:
+            inputs.append(abs_p)
+        if is_output:
+            outputs.append(abs_p)
+    for op, target in redirects:
+        if op in NON_PATH_REDIRECT_OPS:
+            continue
+        if isinstance(target, int):
+            continue
+        t = unquote_word(target)
+        if not t:
+            continue
+        if op in (">&", "<&") and (t.isdigit() or t == "-"):
+            continue  # fd dup/close, not a file path
+        abs_t = _resolve_path(t)
+        if op in WRITE_REDIRECT_OPS or op == ">&":
+            outputs.append(abs_t)
+        else:
+            inputs.append(abs_t)
+    return _merge_path_opinions(
+        read_rule_opinion_for_paths(sources, inputs),
+        _mutating_opinion_for_paths(sources, outputs),
+    )
 
 
 def _git_paths_tracked(project_dir: str, paths: list[str]) -> bool:
@@ -1631,6 +1842,24 @@ def _git_paths_tracked(project_dir: str, paths: list[str]) -> bool:
     return True
 
 
+def _path_allowlisted_for_mutation(sources: list[dict], path: str) -> bool:
+    """True if `path` has an explicit allow rule under a mutating file tool.
+
+    The git-tracked gate guards destructive Bash file ops (`rm`/`rmdir`/`mv`/
+    `gio trash`, plus `cp`), so the only allow rules that exempt a path are the
+    mutating ones (`Edit`/`Write`/`MultiEdit`/`NotebookEdit`). A `Read` allow
+    authorizes read-only access only — it does not imply permission to delete
+    or move the file, so it never carves out the gate.
+    """
+    targets = [path] if path.endswith("/") else [path, path + "/"]
+    for t in targets:
+        for tool in MUTATING_FILE_TOOLS:
+            op = prioritized_opinion(sources, tool, t)
+            if op is not None and op.decision == "allow":
+                return True
+    return False
+
+
 def evaluate_project_file_op(
     norm: list[str], sources: list[dict], project_dir: str
 ) -> Optional[Decision]:
@@ -1644,9 +1873,8 @@ def evaluate_project_file_op(
         after = norm[2:]
     else:
         return None
-    args, target_dir_idx = _extract_all_positional_args(
-        after, EQUALS_FORM_VALUE_PREFIXES.get(name, ()), SHORT_VALUE_FLAG_CHARS.get(name)
-    )
+    equals, shorts, longs = OUTPUT_VALUE_FLAGS.get(name, ((), (), ()))
+    args, output_idx = _extract_all_positional_args(after, equals, shorts, longs)
     if not args:
         return None
     project_root = os.path.abspath(project_dir)
@@ -1657,14 +1885,13 @@ def evaluate_project_file_op(
     if name == "cp":
         destructive = [False] * len(args)
     elif name == "mv":
-        dest_idx = target_dir_idx if target_dir_idx is not None else len(args) - 1
+        dest_idx = output_idx if output_idx is not None else len(args) - 1
         destructive = [i != dest_idx for i in range(len(args))]
     else:
         destructive = [True] * len(args)
     resolved: list[str] = []
     for is_destructive, arg in zip(destructive, args):
-        expanded = expand_tilde_in_arg(arg)
-        abs_p = os.path.abspath(expanded)
+        abs_p = _resolve_path(arg, base_dir=project_dir)
         if is_destructive and abs_p == project_root:
             return Decision("deny", None, [arg])
         if abs_p != project_root and not abs_p.startswith(project_root + "/"):
@@ -1672,10 +1899,26 @@ def evaluate_project_file_op(
         if _touches_sensitive_project_dir(abs_p):
             return None
         resolved.append(abs_p)
-    op = read_rule_opinion_for_paths(sources, resolved)
+    # Input/output-aware deny/ask: Read rules for read operands, mutating rules
+    # for written/deleted operands. `gio trash` deletes every operand.
+    roles = (
+        [(False, True)] * len(args)
+        if name == "gio"
+        else _operand_roles(name, args, output_idx)
+    )
+    inputs = [p for p, (is_in, _) in zip(resolved, roles) if is_in]
+    outputs = [p for p, (_, is_out) in zip(resolved, roles) if is_out]
+    op = _merge_path_opinions(
+        read_rule_opinion_for_paths(sources, inputs),
+        _mutating_opinion_for_paths(sources, outputs),
+    )
     if op is not None:
         return op
-    if not _git_paths_tracked(project_root, resolved):
+    # Paths allow-listed for mutation are exempt from the git-tracked gate (the
+    # user has explicitly trusted them to be modified/deleted, version-controlled
+    # or not); every remaining path must still be committed/staged.
+    needs_tracking = [p for p in resolved if not _path_allowlisted_for_mutation(sources, p)]
+    if needs_tracking and not _git_paths_tracked(project_root, needs_tracking):
         return None  # not in version control -> fall through to ask
     return Decision("allow")
 
@@ -2075,8 +2318,7 @@ def evaluate_command(
             if tool_name == "Bash" and unsafe_construct(words, redirects):
                 return Decision("ask", None, [match])
             if tool_name == "Bash" and norm:
-                path_words = norm[1:] + extract_redirect_path_args(redirects)
-                pr = read_rule_opinion_for_paths(sources, extract_path_args(path_words))
+                pr = check_io_path_rules(sources, cmd_name, norm, redirects)
                 if pr is not None:
                     return Decision(pr.decision, pr.pattern, [match])
         if decision.decision == "allow" and edits_protected_file(tool_name, match):
@@ -2275,6 +2517,8 @@ def decide_bash(sources: list[dict], target: str) -> None:
 
 
 def _eval_non_bash(sources: list[dict], tool_name: str, target: Optional[str]) -> Decision:
+    if tool_name in FILE_TOOLS and target:
+        target = _resolve_path(target)
     decision = prioritized_opinion(sources, tool_name, target or "")
     if decision is not None:
         if decision.decision == "allow" and edits_protected_file(tool_name, target):

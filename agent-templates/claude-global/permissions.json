@@ -64,9 +64,9 @@
       "^(stat|file)\\s",
       "^(xxd|od|strings)(\\s|$)",
       "^(cat|bat|batcat|zcat|bzcat|xzcat|zstdcat)(\\s|$)",
-      "^(uniq|cut|paste|tr|column|fmt|fold|rev|tac|nl|comm|wc)(\\s|$)",
+      "^(uniq|cut|paste|tr|column|fmt|fold|rev|tac|nl|comm|join|wc)(\\s|$)",
       "^(tokei|scc)(\\s|$)",
-      "^(difft?|delta|colordiff)(\\s|$)",
+      "^(difft?|delta|colordiff|cmp)(\\s|$)",
       "^(md5sum|sha1sum|sha256sum|sha512sum|b2sum)(\\s|$)",
       "^(dust|df|duf)(\\s|$)",
       "^du(\\s|$)",
@@ -92,9 +92,12 @@
       "^systemctl (status|is-active|is-enabled|is-failed|list-units|list-unit-files|list-sockets|list-timers|show|cat)(\\s|$)",
       "^docker (ps|images|logs|version|info)(\\s|$)",
       "^kubectl (get|describe|logs|version|cluster-info)(?!.*\\bsecrets?\\b)(\\s|$)",
-      "^unzip -l\\s",
+      "^unzip(\\s|$)",
       "^zipinfo(\\s|$)",
-      "^7z (l|t)\\s"
+      "^7z (l|t)\\s",
+      "^(pandoc|html2text|pdftotext)(\\s|$)",
+      "^(mutool|tesseract)(\\s|$)",
+      "^yt-dlp(\\s|$)"
     ]
   },
   "deny": {

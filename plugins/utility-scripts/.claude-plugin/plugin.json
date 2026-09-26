@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "tool-permissions",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Regex-based allow/ask/deny PreToolUse permission hook for Claude Code.",
   "author": {
     "name": "Lena M.",

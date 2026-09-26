@@ -467,33 +467,79 @@ A command that matches an allow-rule is still re-checked when it passes
 file/directory paths as arguments. This runs for **every** allowed command, not
 an enumerated subset — any reader that isn't explicitly listed (`tac`, `cut`,
 `nl`, `rev`, `comm`, `colordiff`, the `csv*` tools, …) would otherwise leak
-credential files past the deny-list. Each path-like argument (anything resolving
-to `/…`, `~/…`, `../…`, or `..`) is resolved as a **Read** decision through the
-same source priority:
+credential files past the deny-list. Every path argument — operand, redirect
+target, and file-tool `file_path`/`notebook_path` alike, including `.`, `..`,
+and bare relative names — is resolved to an absolute path against
+`$CLAUDE_PROJECT_DIR` before matching, then run through the same source
+priority. **Which rule set applies depends on whether the path is read or
+written**:
+
+- **Input** operands (paths the command reads) are resolved as a **Read**
+  decision — so `cat ~/.ssh/id_rsa`, `tac ~/.aws/credentials`, and
+  `sed 's/a/b/' ~/.aws/credentials` are all blocked even though
+  `cat`/`tac`/`sed` are otherwise allowed.
+- **Output** operands (paths the command writes, creates, or deletes) are
+  resolved as a **mutating** decision (`Edit`/`Write`/`MultiEdit`/
+  `NotebookEdit`) — so `rm ~/.ssh/id_rsa`, `sed -i … ~/.ssh/id_rsa`, and
+  `cp a ~/.ssh/id_rsa` are governed by Edit/Write rules, not Read rules.
+
+The input/output split is per-argument and follows standard CLI conventions:
+
+- read-only commands (`grep`, `cat`, `head`, `tail`, `cut`, `sort`, `uniq`,
+  `comm`, `join`, `cmp`, `wc`, `ls`, `diff`, `file`, `stat`, `jq`, `rg`,
+  `html2text`, `tr`, …) treat every operand as an **input**;
+- `cp`, `install`, `ln`, and `rsync` treat the last operand (or cp/mv's
+  `-t DIR`/`--target-directory[=]DIR`) as the **output** and the rest as inputs;
+- `mv` treats its sources as **both** (read to move them, then removed) and its
+  destination as output;
+- `rm`, `rmdir`, `unlink`, `truncate`, `shred`, and `mkdir` treat every operand
+  as an **output** (deleted/truncated/created);
+- output-via-flag commands (`pandoc`, `mutool`, `yt-dlp` via `-o`/`--output[=]`,
+  `unzip` via `-d`/`--directory[=]`, `wget` via `-O`/`--output-document[=]` or
+  `-P`/`--directory-prefix[=]`, `curl` via `-o`/`--output[=]` or
+  `--output-dir[=]`) treat the flag value as the **output** and the remaining
+  operands as inputs;
+- `pdftotext` and `tesseract` treat the first positional as the **input** and
+  the second (when present) as the **output**;
+- `sed -i` (in-place) treats its file operands as **outputs**;
+- `sed`/`awk` (and their variants) treat their first operand as a script or
+  program, not a path — it is skipped, and only the remaining file operands are
+  checked;
+- remote URL operands (`https://…`, any non-`file` `scheme://…`) are not
+  filesystem paths and are skipped — so `yt-dlp -o vid.mp4 https://…/x.env` is
+  not read as a path ending in `.env`. A `file:` URL (`file:///etc/shadow`,
+  `file://localhost/…`, `file:/…`, even percent-encoded) addresses the local
+  filesystem, so it is resolved to its path and checked like any other path;
+- any other command keeps the conservative default: operands are **inputs**
+  (Read), so an unrecognized reader can't leak credentials.
+
+File-redirection targets are classified independently of the command: `<` is an
+input (Read), `>`, `>>`, `>|`, `&>`, `&>>`, and `>& file` are outputs
+(mutating) — so `cat a > ~/.ssh/id_rsa` is governed by Edit/Write rules.
+Heredoc delimiters (`<<`, `<<-`) and here-string content (`<<<`) are literal
+strings, not file paths, so they are not checked.
 
 - If the highest-priority source with an opinion on that path says
-  **deny**/**ask**, the command is denied/asked — so `cat ~/.ssh/id_rsa`,
-  `tac ~/.aws/credentials`, and `sed 's/a/b/' ~/.aws/credentials` are all
-  blocked even though `cat`/`tac`/`sed` are otherwise allowed.
+  **deny**/**ask**, the command is denied/asked.
 - A higher-priority file can override this by explicitly **allowing** the path
-  for `Read` — e.g. `permissions.local.json` with `Read: ["^~/\\.ssh/.*"]`
-  re-allows `cat ~/.ssh/id_rsa`.
+  for the matching tool (`Read` for inputs, `Edit`/`Write` for outputs) — e.g.
+  `permissions.local.json` with `Read: ["^~/\\.ssh/.*"]` re-allows
+  `cat ~/.ssh/id_rsa`.
 - A harmless `echo ~/.ssh/id_rsa` is also caught; that false positive errs on
   the safe side.
 
 Tokenisation is quote-aware and each argument is unquoted before matching, so
 embedded quotes can't dodge the check — `cat ~/".ssh"/id_rsa` resolves to
-`~/.ssh/id_rsa` and is denied. Every path-like argument is expanded (`~`) and
-resolved lexically to an absolute, normalized path (`..` collapsed, relative
-paths resolved against the hook process's working directory, no symlink
-resolution) *before* matching — otherwise a traversal like
-`cat ~/decoy/../.ssh/id_rsa` would reach `~/.ssh/id_rsa` without ever
+`~/.ssh/id_rsa` and is denied. Every path — operand, redirect target, and
+file-tool path alike, including `.`, `..`, and bare relative names — is
+expanded (`~`) and resolved lexically to an absolute, normalized path (`..`
+collapsed, leading slash runs collapsed, `file:` URLs mapped to their local
+path, relative paths resolved against `$CLAUDE_PROJECT_DIR` — falling back
+to the hook process's working directory when unset — no symlink resolution)
+*before* matching — otherwise a traversal like `cat ~/decoy/../.ssh/id_rsa`
+would reach `~/.ssh/id_rsa`, and `cat //etc/shadow` or
+`cat file:///etc/shadow` would address `/etc/shadow`, without ever
 string-matching the deny pattern anchored on the real path.
-
-File-redirection targets get the same check — `cat < ~/.ssh/id_rsa` is denied
-exactly like `cat ~/.ssh/id_rsa`. Heredoc delimiters (`<<`, `<<-`) and
-here-string content (`<<<`) are literal strings, not file paths, so they are
-not checked.
 
 ## cp/rm/rmdir/mv/gio-trash project-relative auto-allow
 
@@ -504,9 +550,10 @@ commands when **every** positional argument (source and destination alike,
 including `cp`/`mv`'s `-t DIR`/`--target-directory=DIR`) resolves to a path
 inside `$CLAUDE_PROJECT_DIR`, and none of the resolved paths are:
 
-- **specifically protected** — the same **Read**-rule check described above
-  (a deny/ask on that path for `Read` still fires, e.g. a project file matched
-  by a `.env`/credential pattern);
+- **specifically protected** — the same input/output-aware rule check described
+  above: a deny/ask on a **read** operand fires for `Read`, and on a
+  **written/deleted** operand fires for `Edit`/`Write` (e.g. a project file
+  matched by a `.env`/credential pattern);
 - **inside `.claude/` or `.git`** (at any depth) — a bulk `cp -r .claude
   backup` or `rm -rf .git` can't be vetted per-file the way a single credential
   path can, so these always fall through to the normal _ask_ default instead
@@ -518,8 +565,12 @@ inside `$CLAUDE_PROJECT_DIR`, and none of the resolved paths are:
   _ask_, since none of them can be restored from version control. A path that
   resolves to a directory is tracked if it contains any tracked file. This
   makes `cp foo.py new.py`, `mv old.py new.py`, or `rm newfile` on a
-  not-yet-committed file prompt — a `permissions.local.json` allow rule can
-  carve out an exception.
+  not-yet-committed file prompt — an explicit allow rule under a mutating file
+  tool (`Write`/`Edit`/`MultiEdit`/`NotebookEdit`, e.g. in
+  `permissions.local.json`) carves out an exception: such a path is trusted to
+  be modified/deleted, version-controlled or not, so it is exempt from the
+  git-tracked gate. A `Read` allow does **not** exempt — read access is not
+  permission to delete. A deny/ask on the path still wins.
 - **the project root itself is removed** — an operand that resolves to
   `$CLAUDE_PROJECT_DIR` itself on `rm`/`rmdir`/`gio trash` (or as a `mv`
   source) is **denied** outright, never merely asked: deleting or moving the
@@ -530,10 +581,11 @@ This check only runs as a fallback when no `permissions.json` rule already has
 an opinion on the whole command — an explicit `ask`/`deny` on `rm`/`cp`/`mv`/
 `gio trash` in policy still wins outright. It requires `$CLAUDE_PROJECT_DIR` to
 be set; if it isn't, these commands fall through to _ask_ as before. Relative
-arguments are resolved against the hook process's working directory, the same
-assumption `sed -i` path resolution makes. The usual **structural allow guard**
-still applies afterward, so `rm $(cat list.txt)` or `cp file > /dev/tcp/...`
-downgrade to _ask_ regardless of how safe the plain arguments look.
+arguments are resolved against `$CLAUDE_PROJECT_DIR` (falling back to the hook
+process's working directory), the same base `sed -i` path resolution uses. The
+usual **structural allow guard** still applies afterward, so
+`rm $(cat list.txt)` or `cp file > /dev/tcp/...` downgrade to _ask_ regardless
+of how safe the plain arguments look.
 
 ## Limitations
 
