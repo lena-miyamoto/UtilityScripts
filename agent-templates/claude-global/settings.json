@@ -3,11 +3,11 @@
   "env": {
     "ANTHROPIC_AUTH_TOKEN": "<YOUR-AUTH-TOKEN>",
     "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
-    "ANTHROPIC_DEFAULT_FABLE_MODEL": "deepseek-v4-pro[1m]",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro[1m]",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro[1m]",
-    "ANTHROPIC_MODEL": "deepseek-v4-pro[1m]",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-flash",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-flash",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL": "deepseek-v4-pro",
+    "ANTHROPIC_MODEL": "deepseek-v4-pro",
     "FORCE_HYPERLINK": "1",
     "CLAUDE_CODE_TMPDIR": "<USER-HOME-DIR>/.claude/tmp",
     "CLAUDE_CODE_NO_FLICKER": "1",
@@ -36,7 +36,7 @@
     ],
     "defaultMode": "default"
   },
-  "model": "opus",
+  "model": "sonnet",
   "disableClaudeAiConnectors": true,
   "disableBundledSkills": true,
   "disableRemoteControl": true,
@@ -49,7 +49,10 @@
   },
   "effortLevel": "high",
   "modelSettings": {
-    "deepseek-v4-pro[1m]": {
+    "deepseek-flash": {
+      "effortLevel": "high"
+    },
+    "deepseek-v4-pro": {
       "effortLevel": "high"
     }
   },
