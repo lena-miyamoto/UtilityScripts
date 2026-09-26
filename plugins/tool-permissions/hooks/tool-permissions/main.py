@@ -488,6 +488,28 @@ def unquote_word(word: str) -> str:
     return "".join(out)
 
 
+def unquote_script(word: str) -> str:
+    """Strip a sed program word's surrounding quotes, preserving backslashes.
+
+    sed script text is validated as sed receives it, so shell backslash escapes
+    inside the quoted word must be kept — `unquote_word` collapses `\\/` to `/`
+    and corrupts the script's own escape sequences (e.g. an address regex
+    matching a literal `/`), which then fails the safety parser. Only a fully
+    surrounding single- or double-quote pair is stripped — the opening quote must
+    be the word's sole pair (exactly two occurrences), so concat-quoted forms
+    (`'a'b'c'`, `'a'"b"`) fall back to `unquote_word`, which is correct for
+    shell-level unescaping.
+    """
+    if (
+        len(word) >= 2
+        and word[0] in "'\""
+        and word[-1] == word[0]
+        and word.count(word[0]) == 2
+    ):
+        return word[1:-1]
+    return unquote_word(word)
+
+
 def _strip_cr(word: str) -> str:
     return word[:-1] if word.endswith("\r") else word
 
@@ -1075,9 +1097,9 @@ def sed_expression_script(word: str, words: list[str], i: int) -> Optional[tuple
     if word in ("-e", "--expression"):
         if i + 1 >= len(words):
             return None
-        return unquote_word(words[i + 1]), i + 2
+        return unquote_script(words[i + 1]), i + 2
     if word.startswith("--expression="):
-        return unquote_word(word[len("--expression=") :]), i + 1
+        return unquote_script(word[len("--expression=") :]), i + 1
     return None
 
 
@@ -1104,7 +1126,7 @@ def is_safe_sed(words: list[str]) -> bool:
             i += 1
             continue
         if not script_seen:
-            if not is_safe_sed_script(unquote_word(w)):
+            if not is_safe_sed_script(unquote_script(w)):
                 return False
             script_seen = True
         i += 1
@@ -1134,7 +1156,7 @@ def is_safe_sed_stdin_only(words: list[str]) -> bool:
             i += 1
             continue
         if not script_seen:
-            if not is_safe_sed_script(unquote_word(w)):
+            if not is_safe_sed_script(unquote_script(w)):
                 return False
             script_seen = True
         else:
@@ -1185,7 +1207,7 @@ def is_safe_sed_in_place(words: list[str], sources: list[dict]) -> bool:
             i += 1
             continue
         if not script_seen:
-            if not is_safe_sed_script(unquote_word(w)):
+            if not is_safe_sed_script(unquote_script(w)):
                 return False
             script_seen = True
         else:
@@ -1951,6 +1973,23 @@ def expand_tilde_bucket(bucket: dict[str, list[str]]) -> dict[str, list[str]]:
     return out
 
 
+def expand_project_bucket(
+    bucket: dict[str, list[str]], project_dir: str
+) -> dict[str, list[str]]:
+    """Expand `{project}` in rule patterns to the absolute project directory.
+
+    Anchors project rules to the checkout they live in (matching the native
+    settings.json `./**/…` globs) instead of matching anywhere on the system.
+    `{project}` is escaped so a project path with regex metacharacters stays
+    literal.
+    """
+    anchored = re.escape(project_dir)
+    out: dict[str, list[str]] = {}
+    for key, pats in bucket.items():
+        out[key] = [p.replace("{project}", anchored) for p in pats]
+    return out
+
+
 def expand_grouped_keys(bucket: dict[str, list[str]]) -> dict[str, list[str]]:
     """Expand `|`-grouped tool keys (`"Bash|Edit"`) into individual keys."""
     out: dict[str, list[str]] = {}
@@ -2379,12 +2418,16 @@ def _read_json_file(path: str) -> Optional[dict]:
         return None
 
 
-def _opinion_to_buckets(opinion: dict) -> dict[str, dict[str, list[str]]]:
+def _opinion_to_buckets(
+    opinion: dict, project_dir: Optional[str] = None
+) -> dict[str, dict[str, list[str]]]:
     buckets: dict[str, dict[str, list[str]]] = {}
     for kind in ("allow", "ask", "deny"):
         raw = opinion.get(kind, {})
-        expanded = expand_grouped_keys(expand_tilde_bucket(raw))
-        buckets[kind] = expanded
+        expanded = expand_tilde_bucket(raw)
+        if project_dir:
+            expanded = expand_project_bucket(expanded, project_dir)
+        buckets[kind] = expand_grouped_keys(expanded)
     return buckets
 
 
@@ -2398,12 +2441,12 @@ def load_permissions() -> list[dict]:
             os.path.join(project_dir, ".claude", "permissions.local.json")
         )
         if local:
-            sources.append(_opinion_to_buckets(local))
+            sources.append(_opinion_to_buckets(local, project_dir))
         proj = _read_json_file(
             os.path.join(project_dir, ".claude", "permissions.json")
         )
         if proj:
-            sources.append(_opinion_to_buckets(proj))
+            sources.append(_opinion_to_buckets(proj, project_dir))
 
     config_dir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
     global_path = os.path.join(config_dir, "permissions.json")
@@ -2414,7 +2457,7 @@ def load_permissions() -> list[dict]:
         sys.stderr.write(f"[pre-tool-use] Failed to load permissions.json: {e}\n")
         # Fail open — don't block all tool calls when the policy file is unreadable.
         sys.exit(0)
-    sources.append(_opinion_to_buckets(global_policy))
+    sources.append(_opinion_to_buckets(global_policy, project_dir))
 
     return sources
 

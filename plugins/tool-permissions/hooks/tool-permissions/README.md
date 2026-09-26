@@ -137,7 +137,14 @@ If `permissions.json` is unreadable or stdin can't be parsed the hook fails open
   `allow`/`deny`/`ask` (a missing bucket is treated as empty).
 - **Empty array `[]`** — matches the tool unconditionally regardless of input.
 - **`~/`** in any pattern expands to `$HOME` at runtime, making the file
-  portable across users and machines.
+  portable across users and machines. **`{project}`** expands to
+  `$CLAUDE_PROJECT_DIR`, anchoring a rule to the checkout Claude is running in
+  (mirroring the native `settings.json` `./**/…` globs) rather than matching
+  anywhere on the system. It works in all three files: in a project-scoped
+  file it anchors to that checkout; in the **global** file it anchors to
+  *whichever* project is current, so one global rule applies to every project
+  you open. Outside a project (`$CLAUDE_PROJECT_DIR` unset) `{project}` can't
+  resolve, so such rules simply don't match.
 - **Grouped keys** — file tools may share one entry via a `|`-joined key, e.g.
   `"Read|Write|Edit|MultiEdit": [...]`, expanded to per-tool entries at load.
   Non-file tools (`Bash`, `WebSearch`, `WebFetch`, `Skill`) must appear alone.

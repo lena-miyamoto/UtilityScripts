@@ -666,6 +666,29 @@ def test_sed_expression_flag():
     assert main.is_safe_sed(["sed", "--expression=s/a/b/", "f"]) is True
 
 
+def test_sed_script_escaped_delimiter_preserved():
+    # `unquote_word` collapses `\/` to `/`, corrupting an escaped delimiter in a
+    # quoted script; the script must be validated with backslashes preserved.
+    assert main.is_safe_sed(["sed", "-n", r"'/<body/,/<\/body>/p'", "f"]) is True
+    assert main.is_safe_sed(["sed", r"'s/a\/b/x/'"]) is True
+    # …and still fails closed on the exec/write flags.
+    assert main.is_safe_sed(["sed", r"'s/a\/b/x/e'"]) is False
+
+
+def test_sed_escaped_delimiter_e2e():
+    assert ev(r"sed -n '/<body/,/<\/body>/p' README.md").decision == "allow"
+
+
+def test_unquote_script_same_quote_concat_falls_back():
+    # `'a'b'c'` starts and ends with the same quote but is concat-quoted (four
+    # quotes, not a surrounding pair); stripping only the outer pair would yield
+    # `a'b'c'`, so it must fall back to shell-level unescaping → `abc`.
+    assert main.unquote_script("'a'b'c'") == "abc"
+    # A real surrounding pair still strips cleanly and preserves backslashes.
+    assert main.unquote_script(r"'s/a\/b/x/'") == r"s/a\/b/x/"
+    assert main.unquote_script('"s/a/b/"') == "s/a/b/"
+
+
 def test_sed_stdin_only():
     assert main.is_safe_sed_stdin_only(["sed", "s/a/b/"]) is True
     assert main.is_safe_sed_stdin_only(["sed", "s/a/b/", "f"]) is False
@@ -1391,6 +1414,30 @@ def test_expand_tilde_bucket():
     assert main.expand_tilde_bucket({"Read": ["^~/\\.ssh/"]}) == {
         "Read": ["^" + home + "/\\.ssh/"],
     }
+
+
+def test_expand_project_bucket():
+    # `{project}` anchors a rule to the checkout, escaped so regex metacharacters
+    # in the project path stay literal.
+    assert main.expand_project_bucket(
+        {"Read": ["^{project}/.*\\.csv$"]}, "/home/lena/a.b/proj"
+    ) == {"Read": ["^/home/lena/a\\.b/proj/.*\\.csv$"]}
+
+
+def test_global_permissions_project_anchor(monkeypatch, tmp_path):
+    # A `{project}` rule in the global file resolves to the current project, so
+    # one global rule applies to every checkout (each anchored to that checkout).
+    cfg = tmp_path / "cfg"
+    cfg.mkdir()
+    (cfg / "permissions.json").write_text(
+        json.dumps({"deny": {"Read": ["^{project}/secret\\.txt$"]}})
+    )
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work/proj")
+    sources = main.load_permissions()
+    # Project-scoped files don't exist under /work/proj, so global is the only
+    # source, and its `{project}` is anchored to the current project.
+    assert sources[0]["deny"]["Read"] == ["^/work/proj/secret\\.txt$"]
 
 
 def test_prioritized_opinion_bucket_order():
