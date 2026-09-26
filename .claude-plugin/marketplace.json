@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "tool-permissions",
-      "source": "./plugins/utility-scripts",
+      "source": "./plugins/tool-permissions",
       "description": "Regex-based allow/ask/deny PreToolUse permission hook for Claude Code.",
       "version": "0.3.1"
     },

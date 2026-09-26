@@ -4,7 +4,7 @@ Personal collection of shell scripts, Python tools, and configuration files accu
 
 ## Claude Code marketplace
 
-This repo doubles as a [Claude Code plugin marketplace](https://code.claude.com/docs/en/plugin-marketplaces). It publishes the [`tool-permissions`](plugins/utility-scripts/hooks/tool-permissions/README.md) `PreToolUse` hook as the `tool-permissions` plugin:
+This repo doubles as a [Claude Code plugin marketplace](https://code.claude.com/docs/en/plugin-marketplaces). It publishes the [`tool-permissions`](plugins/tool-permissions/hooks/tool-permissions/README.md) `PreToolUse` hook as the `tool-permissions` plugin:
 
 ```bash
 claude plugin marketplace add lena-miyamoto/UtilityScripts
