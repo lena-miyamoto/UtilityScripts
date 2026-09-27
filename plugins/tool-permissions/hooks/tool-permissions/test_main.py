@@ -484,6 +484,97 @@ def test_assignment_line_not_in_prompt():
 
 
 # ---------------------------------------------------------------------------
+# 8b. Process-substitution recursion
+# ---------------------------------------------------------------------------
+
+
+def test_extract_procsubs_single():
+    assert main.extract_procsubs("<(echo hi)") == ("", ["echo hi"])
+    assert main.extract_procsubs(">(echo hi)") == ("", ["echo hi"])
+
+
+def test_extract_procsubs_embedded_and_multiple():
+    assert main.extract_procsubs("x<(date)y") == ("xy", ["date"])
+    assert main.extract_procsubs("<(a)<(b)") == ("", ["a", "b"])
+    assert main.extract_procsubs("pre<(a)mid>(b)post") == ("premidpost", ["a", "b"])
+
+
+def test_extract_procsubs_balanced_parens():
+    assert main.extract_procsubs("<(echo $(date))") == ("", ["echo $(date)"])
+    assert main.extract_procsubs('<(echo "a)b")') == ("", ['echo "a)b"'])
+
+
+def test_extract_procsubs_quotes_are_literal():
+    assert main.extract_procsubs("'<(date)'") == ("'<(date)'", [])
+    assert main.extract_procsubs('"<(date)"') == ('"<(date)"', [])
+
+
+def test_extract_procsubs_unbalanced():
+    assert main.extract_procsubs("<(echo hi") is None
+    assert main.extract_procsubs("echo <(a") is None
+
+
+def test_strip_procsubs_words_and_redirects():
+    w, r, b = main.strip_procsubs(["diff", "<(tr a b)", "<(tr c d)"], [])
+    assert w == ["diff"]
+    assert r == []
+    assert b == ["tr a b", "tr c d"]
+
+
+def test_strip_procsubs_redirect_target():
+    w, r, b = main.strip_procsubs(["cat"], [("<", "<(echo hi)")])
+    assert w == ["cat"]
+    assert r == []  # the FIFO-only redirect is dropped
+    assert b == ["echo hi"]
+
+
+def test_procsub_recursion_allow():
+    # `tr` is allow-listed and `/tmp/` is a safe read target, so recursing into
+    # both `<(...)` bodies makes the whole `diff` auto-allowed.
+    s = src(allow={"Bash": [r"^diff(\s|$)", r"^tr\s"]})
+    assert ev("diff <(tr -s x ' ' < /tmp/a) <(tr -s y ' ' < /tmp/b)", s).decision == "allow"
+
+
+def test_procsub_recursion_deny():
+    # deny propagates out of the subshell — the outer `diff` allow never masks it.
+    s = src(allow={"Bash": [r"^diff(\s|$)"]}, deny={"Bash": ["^ssh host"]})
+    r = ev("diff <(ssh host)", s)
+    assert r.decision == "deny"
+    assert r.cmds == ["ssh host"]
+
+
+def test_procsub_recursion_ask():
+    # ask propagates out of the subshell, and the prompt names the inner command.
+    s = src(allow={"Bash": [r"^diff(\s|$)"]})
+    r = ev("diff <(git push)", s)
+    assert r.decision == "ask"
+    assert r.cmds == ["git push"]
+
+
+def test_procsub_recursion_quoted_not_recursed():
+    # a quoted `<(` is literal text, not a substitution — `echo` stays allow.
+    s = src(allow={"Bash": [r"^echo\s"]})
+    assert ev("echo '<(rm -rf ~)'", s).decision == "allow"
+
+
+def test_procsub_recursion_nested():
+    s = src(allow={"Bash": [r"^diff(\s|$)", r"^cat(\s|$)", r"^echo(\s|$)"]})
+    assert ev("diff <(cat <(echo hi))", s).decision == "allow"
+
+
+def test_procsub_recursion_unbalanced_ask():
+    assert ev("diff <(echo hi").decision == "ask"
+
+
+def test_procsub_recursion_declared_function():
+    # a procsub body may call a function declared earlier in the same source;
+    # the function's own body is still vetted at its declaration site.
+    s = src(allow={"Bash": [r"^diff(\s|$)", r"^tr(\s|$)"]})
+    cmd = "f() { tr a b < /tmp/in; }\ndiff <(f) <(f)"
+    assert ev(cmd, s).decision == "allow"
+
+
+# ---------------------------------------------------------------------------
 # 9. Canonical match strings
 # ---------------------------------------------------------------------------
 
@@ -1638,4 +1729,23 @@ def test_e2e_uv_install_deny(capsys, global_sources):
 def test_e2e_for_ssh_glob_deny(capsys, global_sources):
     assert decide_decision(
         capsys, global_sources, "Bash", {"command": "for f in ~/.ssh/*; do cat $f; done"}
+    ) == "deny"
+
+
+def test_e2e_diff_procsub_allow(capsys, global_sources):
+    # `<(...)` bodies are recursed into: `tr` + `/tmp/` reads are safe, so the
+    # whole `diff` is auto-allowed (was ask before process-substitution recursion).
+    assert decide_decision(
+        capsys, global_sources, "Bash",
+        {
+            "command": "diff <(tr -s '[:space:]' ' ' < /tmp/md_body.txt) "
+            "<(tr -s '[:space:]' ' ' < /tmp/ch001.txt)"
+        },
+    ) == "allow"
+
+
+def test_e2e_diff_procsub_deny(capsys, global_sources):
+    # a protected read inside a `<(...)` body still denies the whole command.
+    assert decide_decision(
+        capsys, global_sources, "Bash", {"command": "diff <(cat ~/.ssh/id_rsa)"}
     ) == "deny"

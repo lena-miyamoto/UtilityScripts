@@ -320,12 +320,15 @@ inside double quotes only substitution is flagged; a backslash escapes the next
 character):
 
 - command substitution `$(…)` / `` `…` `` (also detected inside double quotes)
-- process substitution `<(…)` / `>(…)`
 - prompt-string expansion `${x@P}`
 - write-redirection to a real path — ops `>`, `>>`, `>|`, `&>`, `&>>`, and `>&`
   with a **string** target. `>/dev/null` is exempt, as are `/tmp/` and
   `$HOME/.claude/tmp/` targets; fd dups/closes (`>& 1`, `>&- 0`, `<& 0`) are int
   targets and safe. The here-string `<<<` is safe.
+
+Process substitution `<(…)` / `>(…)` is **not** flagged here — it is recursed
+into instead (see below), so the inner command is vetted directly rather than
+merely downgrading the whole command to _ask_.
 
 **Quirk fix — arithmetic no longer flagged.** `$((arithmetic))` is no longer
 flagged as command substitution. rable distinguishes arithmetic expansion from
@@ -358,6 +361,21 @@ auto-allow exec/write-capable flags on otherwise read-only tools:
 `ip … add`/`del`/`set`/`flush`/… (mutating sub-commands of the `ip` read-rule).
 The `~/.claude/skills/` allow-rule also forbids `..` so a path can't
 traverse out of the skills directory.
+
+### Process substitution
+
+`<(…)` / `>(…)` runs the inner command in a subshell, so the hook recurses into
+each body rather than treating the marker as an opaque hazard. Every body is
+extracted quote-aware (a quoted `<(` / `>(` is literal text, not a
+substitution), re-parsed, and evaluated as its own Bash source; the substitution
+is then stripped from the outer command, which is matched and path-checked on
+the residue. A deny or ask in any body propagates (deny > ask > allow), so
+`diff <(ssh host)` is denied by the `ssh` deny rule and `diff <(cat ~/.ssh/id_rsa)`
+is denied by the read-denied path. An unbalanced `<(`/`>(` fails closed to _ask_.
+Functions declared earlier in the source are visible inside a body (a copy of
+the declared set is passed, mirroring the `$()` assignment recursion), and
+nesting works: `diff <(cat <(echo hi))` recurses through both levels. This lets a
+safe `diff <(tr … < /tmp/a) <(tr … < /tmp/b)` auto-allow instead of prompting.
 
 ## sed safety
 

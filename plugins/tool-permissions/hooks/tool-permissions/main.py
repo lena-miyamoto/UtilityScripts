@@ -733,6 +733,113 @@ def extract_assignment_substitutions(words: list[str]) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Process-substitution recursion
+# ---------------------------------------------------------------------------
+
+
+def extract_procsubs(text: str) -> Optional[tuple[str, list[str]]]:
+    """Strip balanced process substitutions from a single token.
+
+    Returns ``(literal, bodies)``: ``literal`` is `text` with every ``<(` /
+    ``>(` group removed, and ``bodies`` holds the inner shell source of each
+    group. The inner command runs in a subshell, so the caller re-parses and
+    vets each body recursively. Quotes and backslash escapes are respected — a
+    ``<(` / ``>(` inside quotes is literal text, not a substitution. Returns
+    ``None`` on an unbalanced marker (caller fails closed).
+    """
+    out: list[str] = []
+    bodies: list[str] = []
+    n = len(text)
+    i = 0
+    in_single = False
+    in_double = False
+    while i < n:
+        c = text[i]
+        if c == "\\" and not in_single:
+            out.append(text[i : i + 2])
+            i += 2
+            continue
+        if c == "'" and not in_double:
+            in_single = not in_single
+            out.append(c)
+            i += 1
+            continue
+        if c == '"' and not in_single:
+            in_double = not in_double
+            out.append(c)
+            i += 1
+            continue
+        if c in "<>" and i + 1 < n and text[i + 1] == "(" and not in_single and not in_double:
+            body_start = i + 2
+            depth = 1
+            j = body_start
+            in_s = False
+            in_d = False
+            while j < n:
+                ch = text[j]
+                if ch == "\\" and not in_s:
+                    j += 2
+                    continue
+                if ch == "'" and not in_d:
+                    in_s = not in_s
+                    j += 1
+                    continue
+                if ch == '"' and not in_s:
+                    in_d = not in_d
+                    j += 1
+                    continue
+                if not in_s and not in_d:
+                    if ch == "(":
+                        depth += 1
+                    elif ch == ")":
+                        depth -= 1
+                        if depth == 0:
+                            bodies.append(text[body_start:j])
+                            i = j + 1
+                            break
+                j += 1
+            else:
+                return None
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out), bodies
+
+
+def strip_procsubs(
+    words: list[str], redirects: list[tuple[str, str]]
+) -> Optional[tuple[list[str], list[tuple[str, str]], list[str]]]:
+    """Strip process substitutions from a command's words and redirects.
+
+    Returns ``(cleaned_words, cleaned_redirects, bodies)`` where ``bodies`` are
+    the inner sources of every ``<(` / ``>(` group. A word emptied by stripping
+    is dropped; a redirect whose target was purely a substitution is dropped
+    (its FIFO is not a real file operand). Returns ``None`` on any unbalanced
+    marker (caller fails closed).
+    """
+    cleaned_words: list[str] = []
+    bodies: list[str] = []
+    for w in words:
+        r = extract_procsubs(w)
+        if r is None:
+            return None
+        literal, bs = r
+        bodies.extend(bs)
+        if literal:
+            cleaned_words.append(literal)
+    cleaned_redirects: list[tuple[str, str]] = []
+    for op, target in redirects:
+        r = extract_procsubs(target)
+        if r is None:
+            return None
+        literal, bs = r
+        bodies.extend(bs)
+        if literal:
+            cleaned_redirects.append((op, literal))
+    return cleaned_words, cleaned_redirects, bodies
+
+
+# ---------------------------------------------------------------------------
 # xargs delegation
 # ---------------------------------------------------------------------------
 
@@ -2251,12 +2358,29 @@ def walk(
 def evaluate_command(
     node: list[Any], sources: list[dict], tool_name: str, declared: set[str]
 ) -> Decision:
-    """The 10-step per-command pipeline."""
+    """The 11-step per-command pipeline."""
     words, redirects = _split_command(node)
 
     # 1. Empty command (or comment-only) → allow.
     if not words and not redirects:
         return Decision("allow")
+
+    # 1b. Process substitution → recurse into each `<(`/`>(` body. The inner
+    # command runs in a subshell, so it must be vetted exactly like a direct
+    # call; the substitution is then stripped from the outer command (its
+    # pipe/FIFO is not a file operand) so the outer command is matched and
+    # path-checked on the residue.
+    stripped = strip_procsubs(words, redirects)
+    if stripped is None:
+        return Decision("ask", None, [render_match_string(words, redirects)])
+    stripped_words, stripped_redirects, procsub_bodies = stripped
+    if procsub_bodies:
+        inner = _aggregate(
+            [evaluate(b, sources, tool_name, set(declared)) for b in procsub_bodies]
+        )
+        if inner.decision != "allow":
+            return inner
+        words, redirects = stripped_words, stripped_redirects
 
     # 2. Assignment with command-substitution RHS → recurse into the body.
     if not redirects:
