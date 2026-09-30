@@ -109,10 +109,39 @@ The decision is written to stdout as:
     restricted — anything outside the list falls through to _ask_. An allow-list
     is meaningless otherwise: a non-match that auto-allows lets, say, `WebFetch`
     reach any off-list domain.
-  - A tool **without** an allow-list (e.g. `Read`, `Edit`, `Glob`) keeps the
-    permissive _allow_ default.
+  - File tools (`Read`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`) fall
+    through to _ask_ except for the implicit allows below; see
+    [File-tool default access](#file-tool-default-access).
+  - A non-file tool **without** an allow-list (e.g. `Glob`) keeps the permissive
+    _allow_ default.
   - An empty allow-list `[]` (e.g. `WebSearch`) is a bare match — _allow_
     unconditionally.
+
+### File-tool default access
+
+When no rule in any permissions file matches a file-tool call, the hook decides
+from the path and the tool:
+
+- **Inside `$CLAUDE_CONFIG_DIR`** (default `~/.claude`): `Read` is allowed for
+  everything; mutating tools (`Write`/`Edit`/`MultiEdit`/`NotebookEdit`) are
+  allowed only for `*.md` files under the `plans/` subdir, and fall through to
+  _ask_ elsewhere.
+- **Inside the project directory (`$CLAUDE_PROJECT_DIR`)**: `Read` is allowed
+  for any file. Mutating tools (`Write`/`Edit`/`MultiEdit`/`NotebookEdit`) are
+  allowed for any file that is part of version control (checked via
+  `git ls-files`), plus `~`-prefixed `*.md`/`*.txt` backup files (e.g.
+  `~notes.md`, `~draft.txt`) matched on the basename, which are typically
+  untracked. `Write` and `NotebookEdit` additionally allow a file that does not
+  exist yet (a pure create). Any other file in the project falls through to
+  _ask_.
+- **Everywhere else** (outside both the project and the config dir): _ask_.
+
+The config dir is resolved dynamically (`$CLAUDE_CONFIG_DIR`, else `~/.claude`),
+not hard-coded. It is also checked before the project dir, so a path under
+`$CLAUDE_CONFIG_DIR` is decided by the config-dir rules even when that directory
+also sits inside `$CLAUDE_PROJECT_DIR` — the project's git-tracked rule is
+never consulted there. An explicit `allow`/`ask`/`deny` rule in any permissions
+file still takes precedence over these implicit defaults.
 
 For deny and ask decisions the hook also writes a colored summary to **stderr**
 for terminal visibility: bold red `✗ DENIED` or bold yellow `? ASK`, followed by
@@ -641,6 +670,9 @@ of how safe the plain arguments look.
   `while`/`until`/`for`/`done`/`fi`/`esac`/`case` raise `ParseError` and **ask**.
   A deliberate consequence of the "trust the parser" policy.
 - **The git-tracked gate runs one `git ls-files` subprocess per fallback
-  evaluation.** A small cost on each auto-allowed `cp`/`rm`/`rmdir`/`mv`/
-  `gio trash`, but these are not hot paths. It fails closed (→ _ask_) if `git`
-  is missing, the project isn't a repo, or the call times out.
+  evaluation.** This applies to each auto-allowed `cp`/`rm`/`rmdir`/`mv`/
+  `gio trash`, and to each mutating file-tool call (`Write`/`Edit`/`MultiEdit`/
+  `NotebookEdit`) that isn't a `~`-backup and isn't a create of a non-existent
+  file via `Write`/`NotebookEdit`. `Read` never reaches the gate. It fails
+  closed (→ _ask_) if `git` is missing, the project isn't a repo, or the call
+  times out.

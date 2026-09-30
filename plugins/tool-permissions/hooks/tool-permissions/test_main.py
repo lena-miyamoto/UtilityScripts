@@ -1625,11 +1625,144 @@ def test_web_fetch_bash_deny_wins():
 
 
 def test_defaults_non_bash():
-    assert main._eval_non_bash([], "Read", "/x").decision == "allow"
+    # File tools default to ask outside the project and config dir; non-file
+    # tools keep their old defaults.
+    assert main._eval_non_bash([], "Read", "/x").decision == "ask"
     assert main._eval_non_bash([], "WebSearch", "q").decision == "allow"
     assert main._eval_non_bash([], "WebFetch", "u").decision == "allow"
     # tool with a non-empty allow-list that doesn't match -> ask
     assert main._eval_non_bash([src(allow={"Skill": ["x"]})], "Skill", "y").decision == "ask"
+
+
+def test_default_file_allow_config_dir_read(monkeypatch):
+    # Read is allowed for everything under the config dir (default ~/.claude),
+    # not just .md files.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    for p in (
+        HOME + "/.claude/notes.md",
+        HOME + "/.claude/settings.json",
+        HOME + "/.claude/plans/plan.md",
+    ):
+        assert main._eval_non_bash([], "Read", p).decision == "allow", p
+
+
+def test_default_file_allow_config_dir_plans_write(monkeypatch):
+    # Mutating tools may write `*.md` files under {config}/plans/.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    for tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+        assert main._eval_non_bash([], tool, HOME + "/.claude/plans/plan.md").decision == "allow", tool
+        assert main._eval_non_bash([], tool, HOME + "/.claude/plans/sub/foo.md").decision == "allow", tool
+
+
+def test_default_file_allow_config_dir_write_asks(monkeypatch):
+    # Mutating tools elsewhere in the config dir (and non-.md under plans/)
+    # still fall through to ask.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    for tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+        assert main._eval_non_bash([], tool, HOME + "/.claude/settings.json").decision == "ask", tool
+        assert main._eval_non_bash([], tool, HOME + "/.claude/notes.md").decision == "ask", tool
+        assert main._eval_non_bash([], tool, HOME + "/.claude/plans/plan.txt").decision == "ask", tool
+
+
+def test_default_file_allow_config_dir_override(monkeypatch):
+    # The config dir is resolved dynamically from CLAUDE_CONFIG_DIR.
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/custom/cfg")
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    assert main._eval_non_bash([], "Read", "/custom/cfg/foo.md").decision == "allow"
+    assert main._eval_non_bash([], "Edit", "/custom/cfg/plans/plan.md").decision == "allow"
+    # the default ~/.claude is no longer treated as the config dir.
+    assert main._eval_non_bash([], "Read", HOME + "/.claude/foo.md").decision == "ask"
+
+
+def test_default_file_allow_project_tracked(monkeypatch):
+    # Any git-tracked file inside the project allows read + write, regardless
+    # of extension.
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work/proj")
+    monkeypatch.setattr(os.path, "exists", lambda p: True)
+    monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: True)
+    for tool in ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit"):
+        assert main._eval_non_bash([], tool, "/work/proj/src/app.ts").decision == "allow", tool
+        assert main._eval_non_bash([], tool, "/work/proj/README.md").decision == "allow", tool
+        assert main._eval_non_bash([], tool, "/work/proj/.claude/CLAUDE.md").decision == "allow", tool
+
+
+def test_default_file_allow_project_untracked_existing(monkeypatch):
+    # An existing untracked file inside the project: Read is allowed, mutating
+    # tools fall through to ask (no version-control safety net).
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work/proj")
+    monkeypatch.setattr(os.path, "exists", lambda p: True)
+    monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: False)
+    assert main._eval_non_bash([], "Read", "/work/proj/src/new.ts").decision == "allow"
+    for tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
+        assert main._eval_non_bash([], tool, "/work/proj/src/new.ts").decision == "ask", tool
+
+
+def test_default_file_allow_project_new_file(monkeypatch):
+    # A non-existent file inside the project is a pure create: the creating
+    # tools (Write/NotebookEdit) auto-allow without a version-control gate;
+    # Edit/MultiEdit still fall through to ask.
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work/proj")
+    monkeypatch.setattr(os.path, "exists", lambda p: False)
+    monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: False)
+    for tool in ("Write", "NotebookEdit"):
+        assert main._eval_non_bash([], tool, "/work/proj/src/fresh.ts").decision == "allow", tool
+    for tool in ("Edit", "MultiEdit"):
+        assert main._eval_non_bash([], tool, "/work/proj/src/fresh.ts").decision == "ask", tool
+
+
+def test_default_file_allow_backup_files(monkeypatch):
+    # `~`-prefixed `*.md`/`*.txt` are auto-allowed (read + write) inside the
+    # project even when untracked. No version-control gate.
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work/proj")
+    monkeypatch.setattr(os.path, "exists", lambda p: True)
+    monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: False)
+    for tool in ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit"):
+        assert main._eval_non_bash([], tool, "/work/proj/~notes.md").decision == "allow", tool
+        assert main._eval_non_bash([], tool, "/work/proj/sub/~my-file.txt").decision == "allow", tool
+    # other `~`-prefixed extensions fall through to the git-tracked gate.
+    assert main._eval_non_bash([], "Edit", "/work/proj/~backup.bak").decision == "ask"
+    assert main._eval_non_bash([], "Edit", "/work/proj/~script.py").decision == "ask"
+
+
+def test_default_file_allow_backup_outside_project(monkeypatch):
+    # `~`-prefixed backups outside the current project are not auto-allowed.
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work/proj")
+    assert main._eval_non_bash([], "Edit", "/other/~notes.md").decision == "ask"
+    assert main._eval_non_bash([], "Edit", HOME + "/~notes.txt").decision == "ask"
+
+
+def test_default_file_allow_backup_no_project(monkeypatch):
+    # No project -> no directory to scope the `~` rule to -> ask.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    assert main._eval_non_bash([], "Edit", "/work/proj/~notes.md").decision == "ask"
+
+
+def test_default_file_allow_outside_project_and_config(monkeypatch):
+    # Anything outside both the project and config dir asks, read and write.
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work/proj")
+    monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: True)
+    for tool in ("Read", "Edit", "Write"):
+        assert main._eval_non_bash([], tool, "/etc/passwd").decision == "ask", tool
+        assert main._eval_non_bash([], tool, "/other/file.md").decision == "ask", tool
+
+
+def test_default_file_allow_protected_file_still_asks(monkeypatch):
+    # The self-protection guard still bumps a git-tracked protected file to ask.
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work/proj")
+    monkeypatch.setattr(os.path, "exists", lambda p: True)
+    monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: True)
+    assert main._eval_non_bash([], "Edit", "/work/proj/.claude/permissions.json").decision == "ask"
+
+
+def test_default_file_allow_explicit_rule_wins(monkeypatch):
+    # An explicit deny in permissions still beats the implicit default allow.
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work/proj")
+    monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: True)
+    s = [src(deny={"Edit": ["^/work/proj/.*"]})]
+    assert main._eval_non_bash(s, "Edit", "/work/proj/src/app.ts").decision == "deny"
 
 
 def test_webfetch_anchoring():

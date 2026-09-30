@@ -121,6 +121,9 @@ SCRIPT_FIRST_COMMANDS = {"sed", "awk", "gawk", "mawk", "nawk"}
 
 MUTATING_FILE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 FILE_TOOLS = {"Read", "Write", "Edit", "MultiEdit", "NotebookEdit"}
+# File tools that can create a new file. Edit/MultiEdit only modify existing
+# files, so the non-existent-create carve-out applies to these two only.
+CREATING_FILE_TOOLS = ("Write", "NotebookEdit")
 
 # Redirect targets that are never treated as write-op escapes.
 SAFE_REDIRECT_PREFIXES = ("/dev/null", "/tmp/", os.path.expanduser("~/.claude/tmp/"))
@@ -2683,6 +2686,52 @@ def decide_bash(sources: list[dict], target: str) -> None:
         out("allow")
 
 
+def _default_file_allow(tool_name: str, path: Optional[str]) -> bool:
+    """Default allow for file tools when no explicit rule matched.
+
+    * Inside the global config dir (``$CLAUDE_CONFIG_DIR``, else
+      ``~/.claude``) ``Read`` is allowed for everything; mutating tools
+      (``Write``/``Edit``/``MultiEdit``/``NotebookEdit``) are allowed only for
+      ``*.md`` files under the ``plans/`` subdir, and fall through to ask
+      elsewhere.
+    * Inside the project dir, ``Read`` is allowed for anything; mutating tools
+      (``Write``/``Edit``/``MultiEdit``/``NotebookEdit``) are allowed for
+      git-tracked files and ``~``-prefixed ``*.md``/``*.txt`` backup files
+      (typically untracked). ``Write`` and ``NotebookEdit`` additionally allow
+      a file that doesn't exist yet (a pure create). Anything else in the
+      project falls through to ask.
+    * Everywhere else falls through to ask.
+    """
+    if not path:
+        return False
+    norm = os.path.abspath(path)
+    base = os.path.basename(norm)
+
+    config_dir = os.path.abspath(
+        os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+    )
+    if norm == config_dir or norm.startswith(config_dir + os.sep):
+        if tool_name == "Read":
+            return True
+        plans_dir = os.path.join(config_dir, "plans")
+        return base.endswith(".md") and norm.startswith(plans_dir + os.sep)
+
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
+    if not project_dir:
+        return False
+    project_dir = os.path.abspath(project_dir)
+    if norm == project_dir or norm.startswith(project_dir + os.sep):
+        if tool_name == "Read":
+            return True
+        if base.startswith("~") and (base.endswith(".md") or base.endswith(".txt")):
+            return True
+        if tool_name in CREATING_FILE_TOOLS and not os.path.exists(norm):
+            return True
+        return _git_paths_tracked(project_dir, [norm])
+
+    return False
+
+
 def _eval_non_bash(sources: list[dict], tool_name: str, target: Optional[str]) -> Decision:
     if tool_name in FILE_TOOLS and target:
         target = _resolve_path(target)
@@ -2692,7 +2741,7 @@ def _eval_non_bash(sources: list[dict], tool_name: str, target: Optional[str]) -
             return Decision("ask", None, [target] if target else [])
         return decision
     if tool_name in FILE_TOOLS:
-        decision = Decision("allow")
+        decision = Decision("allow") if _default_file_allow(tool_name, target) else Decision("ask")
     else:
         restricted = any(
             len(source.get("allow", {}).get(tool_name, [])) > 0 for source in sources
