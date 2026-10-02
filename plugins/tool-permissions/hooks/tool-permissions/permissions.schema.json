@@ -32,7 +32,7 @@
       "description": "List of ECMAScript regex patterns matched against the tool's input field. Empty list [] matches the tool unconditionally regardless of input.",
       "items": {
         "type": "string",
-        "description": "ECMAScript regex. ~/  expands to $HOME and {project} to $CLAUDE_PROJECT_DIR at runtime (in the global file, {project} resolves to whichever project is current). Match target per tool: Bash→command, Read/Edit/MultiEdit/Write→file_path, NotebookEdit→notebook_path, WebSearch→query, WebFetch→url, Skill→skill."
+        "description": "ECMAScript regex. ~/  expands to $HOME, {project-dir} to $CLAUDE_PROJECT_DIR, and {global-conf-dir} to the global config dir ($CLAUDE_CONFIG_DIR, else ~/.claude) at runtime (in the global file, {project-dir} resolves to whichever project is current). Match target per tool: Bash→command, Read/Edit/MultiEdit/Write→file_path, NotebookEdit→notebook_path, WebSearch→query, WebFetch→url, Skill→skill."
       }
     }
   }

@@ -331,9 +331,6 @@ def test_unsafe_construct_write_redirects():
 def test_unsafe_construct_safe_targets():
     assert main.unsafe_construct(["echo"], [(">", "/dev/null")]) is False
     assert main.unsafe_construct(["echo"], [(">", "/tmp/x")]) is False
-    assert main.unsafe_construct(
-        ["echo"], [(">", os.path.expanduser("~/.claude/tmp/x"))]
-    ) is False
     assert main.unsafe_construct(["echo"], [("<<<", "hi")]) is False
 
 
@@ -1507,28 +1504,50 @@ def test_expand_tilde_bucket():
     }
 
 
-def test_expand_project_bucket():
-    # `{project}` anchors a rule to the checkout, escaped so regex metacharacters
-    # in the project path stay literal.
-    assert main.expand_project_bucket(
-        {"Read": ["^{project}/.*\\.csv$"]}, "/home/lena/a.b/proj"
-    ) == {"Read": ["^/home/lena/a\\.b/proj/.*\\.csv$"]}
+def test_expand_placeholders():
+    # `{project-dir}` and `{global-conf-dir}` anchor rules to escaped absolute
+    # paths, so regex metacharacters in the path stay literal.
+    assert main.expand_placeholders(
+        {"Read": ["^{project-dir}/.*\\.csv$", "^{global-conf-dir}/x$"]},
+        "/home/user/a.b/proj",
+        "/home/user/.claude",
+    ) == {
+        "Read": [
+            "^/home/user/a\\.b/proj/.*\\.csv$",
+            "^/home/user/\\.claude/x$",
+        ]
+    }
 
 
 def test_global_permissions_project_anchor(monkeypatch, tmp_path):
-    # A `{project}` rule in the global file resolves to the current project, so
-    # one global rule applies to every checkout (each anchored to that checkout).
+    # A `{project-dir}` rule in the global file resolves to the current project,
+    # so one global rule applies to every checkout (each anchored to that
+    # checkout).
     cfg = tmp_path / "cfg"
     cfg.mkdir()
     (cfg / "permissions.json").write_text(
-        json.dumps({"deny": {"Read": ["^{project}/secret\\.txt$"]}})
+        json.dumps({"deny": {"Read": ["^{project-dir}/secret\\.txt$"]}})
     )
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work/proj")
     sources = main.load_permissions()
     # Project-scoped files don't exist under /work/proj, so global is the only
-    # source, and its `{project}` is anchored to the current project.
+    # source, and its `{project-dir}` is anchored to the current project.
     assert sources[0]["deny"]["Read"] == ["^/work/proj/secret\\.txt$"]
+
+
+def test_global_conf_dir_anchor(monkeypatch, tmp_path):
+    # `{global-conf-dir}` in any file resolves to the config dir, anchoring a
+    # rule to config-dir paths portably.
+    cfg = tmp_path / "cfg"
+    cfg.mkdir()
+    (cfg / "permissions.json").write_text(
+        json.dumps({"allow": {"Read": ["^{global-conf-dir}/plans/.*\\.md$"]}})
+    )
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    sources = main.load_permissions()
+    assert sources[0]["allow"]["Read"] == ["^" + re.escape(str(cfg)) + "/plans/.*\\.md$"]
 
 
 def test_prioritized_opinion_bucket_order():

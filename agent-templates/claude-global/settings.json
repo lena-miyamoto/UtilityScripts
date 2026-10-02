@@ -9,7 +9,6 @@
     "ANTHROPIC_DEFAULT_FABLE_MODEL": "deepseek-v4-pro",
     "ANTHROPIC_MODEL": "deepseek-v4-pro",
     "FORCE_HYPERLINK": "1",
-    "CLAUDE_CODE_TMPDIR": "<USER-HOME-DIR>/.claude/tmp",
     "CLAUDE_CODE_NO_FLICKER": "1",
     "CLAUDE_CODE_RETRY_WATCHDOG": "1",
     "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",

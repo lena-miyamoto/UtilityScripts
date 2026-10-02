@@ -126,7 +126,7 @@ FILE_TOOLS = {"Read", "Write", "Edit", "MultiEdit", "NotebookEdit"}
 CREATING_FILE_TOOLS = ("Write", "NotebookEdit")
 
 # Redirect targets that are never treated as write-op escapes.
-SAFE_REDIRECT_PREFIXES = ("/dev/null", "/tmp/", os.path.expanduser("~/.claude/tmp/"))
+SAFE_REDIRECT_PREFIXES = ("/dev/null", "/tmp/")
 
 # Redirect ops that write to (or clobber) a file.
 WRITE_REDIRECT_OPS = (">", ">>", ">|", "&>", "&>>")
@@ -2083,20 +2083,33 @@ def expand_tilde_bucket(bucket: dict[str, list[str]]) -> dict[str, list[str]]:
     return out
 
 
-def expand_project_bucket(
-    bucket: dict[str, list[str]], project_dir: str
+def expand_placeholders(
+    bucket: dict[str, list[str]],
+    project_dir: Optional[str],
+    config_dir: Optional[str],
 ) -> dict[str, list[str]]:
-    """Expand `{project}` in rule patterns to the absolute project directory.
+    """Expand `{project-dir}` and `{global-conf-dir}` to escaped absolute paths.
 
-    Anchors project rules to the checkout they live in (matching the native
-    settings.json `./**/…` globs) instead of matching anywhere on the system.
-    `{project}` is escaped so a project path with regex metacharacters stays
-    literal.
+    `{project-dir}` anchors a rule to the checkout Claude is running in
+    (mirroring the native settings.json `./**/…` globs); `{global-conf-dir}`
+    anchors it to the global config dir. Values are `re.escape`d so a path with
+    regex metacharacters stays literal. A placeholder whose value is unavailable
+    (e.g. `{project-dir}` outside a project) is left untouched, so such rules
+    simply never match.
     """
-    anchored = re.escape(project_dir)
+    subs: list[tuple[str, str]] = []
+    if project_dir:
+        subs.append(("{project-dir}", re.escape(project_dir)))
+    if config_dir:
+        subs.append(("{global-conf-dir}", re.escape(config_dir)))
+    if not subs:
+        return bucket
     out: dict[str, list[str]] = {}
     for key, pats in bucket.items():
-        out[key] = [p.replace("{project}", anchored) for p in pats]
+        new = pats
+        for placeholder, value in subs:
+            new = [p.replace(placeholder, value) for p in new]
+        out[key] = new
     return out
 
 
@@ -2546,14 +2559,15 @@ def _read_json_file(path: str) -> Optional[dict]:
 
 
 def _opinion_to_buckets(
-    opinion: dict, project_dir: Optional[str] = None
+    opinion: dict,
+    project_dir: Optional[str] = None,
+    config_dir: Optional[str] = None,
 ) -> dict[str, dict[str, list[str]]]:
     buckets: dict[str, dict[str, list[str]]] = {}
     for kind in ("allow", "ask", "deny"):
         raw = opinion.get(kind, {})
         expanded = expand_tilde_bucket(raw)
-        if project_dir:
-            expanded = expand_project_bucket(expanded, project_dir)
+        expanded = expand_placeholders(expanded, project_dir, config_dir)
         buckets[kind] = expand_grouped_keys(expanded)
     return buckets
 
@@ -2563,19 +2577,20 @@ def load_permissions() -> list[dict]:
     sources: list[dict] = []
 
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+
     if project_dir:
         local = _read_json_file(
             os.path.join(project_dir, ".claude", "permissions.local.json")
         )
         if local:
-            sources.append(_opinion_to_buckets(local, project_dir))
+            sources.append(_opinion_to_buckets(local, project_dir, config_dir))
         proj = _read_json_file(
             os.path.join(project_dir, ".claude", "permissions.json")
         )
         if proj:
-            sources.append(_opinion_to_buckets(proj, project_dir))
+            sources.append(_opinion_to_buckets(proj, project_dir, config_dir))
 
-    config_dir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
     global_path = os.path.join(config_dir, "permissions.json")
     try:
         with open(global_path, "r", encoding="utf-8") as f:
@@ -2584,7 +2599,7 @@ def load_permissions() -> list[dict]:
         sys.stderr.write(f"[pre-tool-use] Failed to load permissions.json: {e}\n")
         # Fail open — don't block all tool calls when the policy file is unreadable.
         sys.exit(0)
-    sources.append(_opinion_to_buckets(global_policy, project_dir))
+    sources.append(_opinion_to_buckets(global_policy, project_dir, config_dir))
 
     return sources
 

@@ -3,13 +3,13 @@
   "version": 1,
   "deny": {
     "Write|Edit|MultiEdit|NotebookEdit": [
-      "^{project}/.*\\.csv$",
-      "^{project}/.*\\.svg$"
+      "^{project-dir}/.*\\.csv$",
+      "^{project-dir}/.*\\.svg$"
     ],
     "Read|Write|Edit|MultiEdit|NotebookEdit": [
-      "^{project}/(?:.*/)?\\.env[^/]*$",
-      "^{project}/(?:.*/)?__pycache__(/|$)",
-      "^{project}/(?:.*/)?node_modules(/|$)"
+      "^{project-dir}/(?:.*/)?\\.env[^/]*$",
+      "^{project-dir}/(?:.*/)?__pycache__(/|$)",
+      "^{project-dir}/(?:.*/)?node_modules(/|$)"
     ]
   }
 }

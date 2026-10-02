@@ -28,6 +28,13 @@ Before committing, verify no confidential values added to tracked files.
 - Podman-managed services: preserve the existing safety pattern unless user explicitly asks to expose services.
 - Preserve backup/append-only reconfiguration behavior unless user asked for reset.
 
+## Plugins
+
+- **Version bump is mandatory after every change under `plugins/`.** Any edit to a plugin must bump its version in three places, kept in sync, before the change is complete:
+  - `plugins/<plugin>/.claude-plugin/plugin.json` → `version`
+  - `.claude-plugin/marketplace.json` → the matching `plugins[]` entry → `version`
+  - the plugin's `pyproject.toml` → `version`
+
 ## Standalone Utilities
 
 - Keep standalone scripts single-purpose, lightweight. Avoid large framework dependencies when standard shell or small scripting-library solutions suffice.

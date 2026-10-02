@@ -31,7 +31,7 @@ Layout, left to right:
 
 Monthly (Anthropic) or all-time (DeepSeek) spend is computed by scanning
 `<CLAUDE_CONFIG_DIR>/projects/**/*.jsonl`, cached for 2 min in
-`<CLAUDE_CODE_TMPDIR>/monthly-cost.json` / `all-time-cost.json`. Per-model
+the system temp dir (`/tmp` on Linux): `monthly-cost.json` / `all-time-cost.json`. Per-model
 rates live in `model_rates()` — see
 <https://platform.claude.com/docs/en/about-claude/pricing> and
 <https://api-docs.deepseek.com/quick_start/pricing>. DeepSeek rates are
@@ -43,8 +43,7 @@ instead of trusting the harness's `data.cost.total_cost_usd`, which falls back
 to Anthropic pricing for unrecognized models (~7× overestimate).
 
 `CLAUDE_MONTHLY_BUDGET` (default 200) sets the budget ceiling for Anthropic
-models; `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_TMPDIR` override the cache/config
-locations.
+models; `CLAUDE_CONFIG_DIR` overrides config location.
 
 ## Subagent statusline
 

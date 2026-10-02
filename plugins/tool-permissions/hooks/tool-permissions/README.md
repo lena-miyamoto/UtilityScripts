@@ -166,14 +166,19 @@ If `permissions.json` is unreadable or stdin can't be parsed the hook fails open
   `allow`/`deny`/`ask` (a missing bucket is treated as empty).
 - **Empty array `[]`** — matches the tool unconditionally regardless of input.
 - **`~/`** in any pattern expands to `$HOME` at runtime, making the file
-  portable across users and machines. **`{project}`** expands to
-  `$CLAUDE_PROJECT_DIR`, anchoring a rule to the checkout Claude is running in
-  (mirroring the native `settings.json` `./**/…` globs) rather than matching
-  anywhere on the system. It works in all three files: in a project-scoped
-  file it anchors to that checkout; in the **global** file it anchors to
-  *whichever* project is current, so one global rule applies to every project
-  you open. Outside a project (`$CLAUDE_PROJECT_DIR` unset) `{project}` can't
-  resolve, so such rules simply don't match.
+  portable across users and machines.
+- **`{project-dir}`** expands to `$CLAUDE_PROJECT_DIR`, anchoring a rule to the
+  checkout Claude is running in (mirroring the native `settings.json` `./**/…`
+  globs) rather than matching anywhere on the system. It works in all three
+  files: in a project-scoped file it anchors to that checkout; in the **global**
+  file it anchors to *whichever* project is current, so one global rule applies
+  to every project you open. Outside a project (`$CLAUDE_PROJECT_DIR` unset)
+  `{project-dir}` can't resolve, so such rules simply don't match.
+  **Renamed from `{project}` in 0.7.0** — rules written for `{project}` no longer
+  match and must be updated to `{project-dir}`.
+- **`{global-conf-dir}`** expands to the global Claude config directory
+  (`$CLAUDE_CONFIG_DIR`, else `~/.claude`), anchoring a rule to that directory
+  portably. It works in all three files.
 - **Grouped keys** — file tools may share one entry via a `|`-joined key, e.g.
   `"Read|Write|Edit|MultiEdit": [...]`, expanded to per-tool entries at load.
   Non-file tools (`Bash`, `WebSearch`, `WebFetch`, `Skill`) must appear alone.
@@ -351,9 +356,9 @@ character):
 - command substitution `$(…)` / `` `…` `` (also detected inside double quotes)
 - prompt-string expansion `${x@P}`
 - write-redirection to a real path — ops `>`, `>>`, `>|`, `&>`, `&>>`, and `>&`
-  with a **string** target. `>/dev/null` is exempt, as are `/tmp/` and
-  `$HOME/.claude/tmp/` targets; fd dups/closes (`>& 1`, `>&- 0`, `<& 0`) are int
-  targets and safe. The here-string `<<<` is safe.
+  with a **string** target. `>/dev/null` is exempt, as are `/tmp/` targets; fd
+  dups/closes (`>& 1`, `>&- 0`, `<& 0`) are int targets and safe. The here-string
+  `<<<` is safe.
 
 Process substitution `<(…)` / `>(…)` is **not** flagged here — it is recursed
 into instead (see below), so the inner command is vetted directly rather than

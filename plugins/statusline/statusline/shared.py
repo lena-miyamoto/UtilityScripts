@@ -9,13 +9,14 @@ from __future__ import annotations
 import json
 import math
 import os
+import tempfile
 import time
 from datetime import datetime, timezone
 
 CONFIG_DIR = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(
     os.path.expanduser("~"), ".claude"
 )
-TMPDIR = os.environ.get("CLAUDE_CODE_TMPDIR") or os.path.join(CONFIG_DIR, "tmp")
+TMPDIR = tempfile.gettempdir()
 MONTHLY_CACHE = os.path.join(TMPDIR, "monthly-cost.json")
 ALL_TIME_CACHE = os.path.join(TMPDIR, "all-time-cost.json")
 COST_TTL_MS = 120_000
