@@ -982,6 +982,7 @@ function installOpenWebUi() {
   local openWebUiRootDir="$HOME/.open-webui"
   local openWebUiDataDir="$openWebUiRootDir/data"
   local secretKeyFile="$openWebUiRootDir/webui-secret-key"
+  local secretEnvFile="$openWebUiRootDir/webui.env"
   local webUiPort="3000"
   local llamaCppBaseUrl="http://host.containers.internal:8080/v1"
   local webUiSecretKey
@@ -998,8 +999,7 @@ function installOpenWebUi() {
 
   if ! [ -f "$secretKeyFile" ]; then
     echo "[UBUNTU SETUP] Generating persistent Open WebUI secret key..."
-    umask 077
-    openssl rand -hex 32 >"$secretKeyFile"
+    (umask 077 && openssl rand -hex 32 >"$secretKeyFile")
   fi
 
   webUiSecretKey=$(<"$secretKeyFile")
@@ -1010,21 +1010,25 @@ function installOpenWebUi() {
     exit 1
   fi
 
-  recreateManagedContainer "$containerName" "$image" "Open WebUI"
+  # Pass the secret via a mounted .env file instead of --env so it does not end
+  # up readable via `podman inspect`. Open WebUI loads it through python-dotenv.
+  (umask 077 && printf 'WEBUI_SECRET_KEY=%s\n' "$webUiSecretKey" >"$secretEnvFile")
 
   echo "[UBUNTU SETUP] Pulling documented Open WebUI image '$image'..."
   podman pull "$image"
+
+  recreateManagedContainer "$containerName" "$image" "Open WebUI"
 
   echo "[UBUNTU SETUP] Starting Open WebUI container on http://127.0.0.1:$webUiPort ..."
   podman run -d \
     --name "$containerName" \
     --hostname "$containerName" \
-    --pull newer \
     --publish 127.0.0.1:$webUiPort:8080 \
+    --add-host host.containers.internal:host-gateway \
     --volume "$openWebUiDataDir:/app/backend/data:U" \
+    --volume "$secretEnvFile:/app/backend/.env:ro" \
     --env "TZ=$(cat /etc/timezone)" \
     --env "WEBUI_URL=http://127.0.0.1:$webUiPort" \
-    --env "WEBUI_SECRET_KEY=$webUiSecretKey" \
     --env "ENABLE_OPENAI_API=true" \
     --env "OPENAI_API_BASE_URL=$llamaCppBaseUrl" \
     --env "OPENAI_API_KEY=" \
@@ -1243,7 +1247,7 @@ function installLlamaCpp() {
   fi
 
   echo Start llama-server on localhost:8080 with:
-  echo llama-server --hf-repo 'Jackrong/Qwen3.5-9B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF' --hf-file 'Qwen3.5-9B.Q4_K_M.gguf' --port 8080 \
+  echo llama-server --host 0.0.0.0 --hf-repo 'Jackrong/Qwen3.5-9B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF' --hf-file 'Qwen3.5-9B.Q4_K_M.gguf' --port 8080 \
     -c 61440 \
     -ngl 99 \
     -fa on \
@@ -1592,6 +1596,7 @@ function printHelpText() {
   echo "  --install-local-ai              installs Node.js and Claude Code"
   echo "  --install-godot                 installs Godot 4.5 via Friendly Godot Version Manager (fgvm)"
   echo "  --install-openssh-server        installs openssh-server for local testing"
+  echo "  --install-openwebui             installs Open WebUI (local AI chat UI) in a rootless Podman container"
   echo "  --configure-gsettings           configures useful GNOME settings"
   echo "  --configure-lenas-gsettings     same as --configure-gsettings, but with private extra settings for Lena <3"
   echo "  --reconfigure-git               deletes local git config and reconfigures it from scratch"
@@ -1634,6 +1639,8 @@ for arg in "$@"; do
     UBUNTU_SETUP_INSTALL_GODOT=1
   elif [[ "$arg" == "--install-openssh-server" ]]; then
     UBUNTU_SETUP_INSTALL_OPENSSH_SERVER=1
+  elif [[ "$arg" == "--install-openwebui" ]]; then
+    UBUNTU_SETUP_INSTALL_OPENWEBUI=1
   else
     echo "Unknown argument: $arg"
     echo
@@ -1724,6 +1731,18 @@ if [[ "${UBUNTU_SETUP_INSTALL_OPENSSH_SERVER:-}" == "1" ]]; then
     exit 1
   else
     installOpenSshServer
+  fi
+fi
+
+if [[ "${UBUNTU_SETUP_INSTALL_OPENWEBUI:-}" == "1" ]]; then
+  if [[ "${UBUNTU_SETUP_BASIC_SETUP:-}" == "1" ]]; then
+    echo "Error: option --install-openwebui is mutually exclusive with option --basic-setup"
+    exit 1
+  elif [[ "${UBUNTU_SETUP_LENAS_SETUP:-}" == "1" ]]; then
+    echo "Error: option --install-openwebui is mutually exclusive with option --lenas-setup"
+    exit 1
+  else
+    installOpenWebUi
   fi
 fi
 
