@@ -4,12 +4,13 @@
     "ANTHROPIC_AUTH_TOKEN": "<YOUR-AUTH-TOKEN>",
     "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-flash",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-flash",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro",
-    "ANTHROPIC_DEFAULT_FABLE_MODEL": "deepseek-v4-pro",
-    "ANTHROPIC_MODEL": "deepseek-v4-pro",
+    "ANTHROPIC_MODEL": "sonnet",
+    "ANTHROPIC_DEFAULT_MODEL": "sonnet",
     "FORCE_HYPERLINK": "1",
     "CLAUDE_CODE_NO_FLICKER": "1",
+    "CLAUDE_CODE_EFFORT_LEVEL": "high",
     "CLAUDE_CODE_RETRY_WATCHDOG": "1",
     "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
     "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000",
@@ -45,15 +46,6 @@
   "spinnerVerbs": {
     "mode": "replace",
     "verbs": ["Processing"]
-  },
-  "effortLevel": "high",
-  "modelSettings": {
-    "deepseek-flash": {
-      "effortLevel": "high"
-    },
-    "deepseek-v4-pro": {
-      "effortLevel": "high"
-    }
   },
   "awaySummaryEnabled": false,
   "tui": "fullscreen",
