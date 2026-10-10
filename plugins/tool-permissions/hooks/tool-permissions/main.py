@@ -31,6 +31,18 @@ from rable import MatchedPairError, ParseError, parse
 # parser and stripping would let `eval "echo; ssh"` match `^echo` and pass `ssh`.
 COMMAND_WRAPPERS = {"command", "exec", "builtin", "nohup"}
 
+# Builtins / reserved words that run no external command and touch no named file
+# (only stdin/stdout/fds, which redirect path-checking covers). Deliberately
+# excluded: `eval`, `source`/`.`, `exec`, `command`, `builtin`, `time`, `trap`,
+# `enable`, `kill` — those execute code, read named files, or send signals.
+SAFE_BUILTINS = frozenset(
+    {
+        "continue", "break",  # loop-control keywords — execute nothing
+        "return", "exit", "shift", ":",  # control-flow / no-ops — run nothing external
+        "read",  # stdin/fd -> variable (a file it reads comes via a redirect)
+    }
+)
+
 # Assignment-modifier keywords stripped before substitution-recursion detection.
 ASSIGNMENT_MODIFIERS = {"local", "export", "declare", "typeset", "readonly"}
 
@@ -458,8 +470,12 @@ def unsafe_construct(words: list[str], redirects: list[tuple[str, str]]) -> bool
     for op, target in redirects:
         if _unsafe_redirect(op, target):
             return True
-        # heredoc bodies and here-string content are still expanded by bash.
-        if op in ("<<", "<<-", "<<<") and _unsafe_text(target):
+        # A redirect target is expanded by bash: heredoc bodies and here-string
+        # content, plus any `$(…)`/backtick/`${x@P}` in a read target such as
+        # `cat < "$(…)` (a write target is already caught by _unsafe_redirect,
+        # but a `/tmp/`-prefixed write still needs this to catch the substitution).
+        # fd dups/closes are int targets and carry no expansion.
+        if not isinstance(target, int) and _unsafe_text(target):
             return True
     return False
 
@@ -840,6 +856,111 @@ def strip_procsubs(
         if literal:
             cleaned_redirects.append((op, literal))
     return cleaned_words, cleaned_redirects, bodies
+
+
+# ---------------------------------------------------------------------------
+# Command-substitution recursion
+# ---------------------------------------------------------------------------
+
+
+def extract_command_subs(text: str) -> Optional[tuple[str, list[str]]]:
+    """Strip balanced ``$(…)`` command substitutions from a single token.
+
+    Unlike process substitution, ``$(…)`` also executes inside double quotes
+    (but not inside single quotes), so only a single-quoted ``$(`` is literal
+    text. ``$((…))`` arithmetic is left untouched (it is not a command).
+    Backticks are not handled here — ``_unsafe_text`` still flags them. Returns
+    ``(literal, bodies)`` with every ``$(…)`` group removed and its inner source
+    in ``bodies``; ``None`` on an unbalanced marker (caller fails closed).
+    """
+    out: list[str] = []
+    bodies: list[str] = []
+    n = len(text)
+    i = 0
+    in_single = False
+    in_double = False
+    while i < n:
+        c = text[i]
+        if c == "\\" and not in_single:
+            out.append(text[i : i + 2])
+            i += 2
+            continue
+        if c == "'" and not in_double:
+            in_single = not in_single
+            out.append(c)
+            i += 1
+            continue
+        if c == '"' and not in_single:
+            in_double = not in_double
+            out.append(c)
+            i += 1
+            continue
+        if (
+            c == "$"
+            and i + 1 < n
+            and text[i + 1] == "("
+            and not in_single
+            and not (i + 2 < n and text[i + 2] == "(")
+        ):
+            body_start = i + 2
+            depth = 1
+            j = body_start
+            in_s = False
+            in_d = False
+            while j < n:
+                ch = text[j]
+                if ch == "\\" and not in_s:
+                    j += 2
+                    continue
+                if ch == "'" and not in_d:
+                    in_s = not in_s
+                    j += 1
+                    continue
+                if ch == '"' and not in_s:
+                    in_d = not in_d
+                    j += 1
+                    continue
+                if not in_s and not in_d:
+                    if ch == "(":
+                        depth += 1
+                    elif ch == ")":
+                        depth -= 1
+                        if depth == 0:
+                            bodies.append(text[body_start:j])
+                            i = j + 1
+                            break
+                j += 1
+            else:
+                return None
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out), bodies
+
+
+def strip_command_subs(
+    words: list[str], redirects: list[tuple[str, str]]
+) -> Optional[tuple[list[str], list[tuple[str, str]], list[str]]]:
+    """Strip ``$(…)`` substitutions from a command's words (not its redirects).
+
+    Returns ``(cleaned_words, redirects, bodies)``. Each ``$(…)`` is replaced by
+    nothing, so a quoted ``"$(…)"`` keeps its surrounding quotes (``""``) and
+    stays a non-empty word for matching, while a bare ``$(…)`` word empties and
+    is dropped. Redirect targets are left untouched — a ``$()`` target is caught
+    by the structural guard (read or write) rather than recursed. Returns
+    ``None`` on any unbalanced marker (caller fails closed).
+    """
+    cleaned_words: list[str] = []
+    bodies: list[str] = []
+    for w in words:
+        r = extract_command_subs(w)
+        if r is None:
+            return None
+        literal, bs = r
+        bodies.extend(bs)
+        if literal:
+            cleaned_words.append(literal)
+    return cleaned_words, list(redirects), bodies
 
 
 # ---------------------------------------------------------------------------
@@ -2309,6 +2430,25 @@ def _walk_arith_for(
     return results
 
 
+def _redirect_node_decision(node: list[Any], sources: list[dict]) -> Decision:
+    """Vette a bare redirect node (a redirect attached to a compound command).
+
+    rable emits a redirect on ``{ …; }``/``( … )``/``while``/``for``/``if``/
+    ``case``/``function`` as a separate top-level ``(redirect …)`` node, which
+    ``walk`` previously allowed blindly. Mirror ``evaluate_command`` step 7 for
+    the redirect alone: the structural write guard first, then read/mutating
+    path rules on the target.
+    """
+    op = node[1]
+    target = node[2]
+    if unsafe_construct([], [(op, target)]):
+        return Decision("ask", None, [f"{op} {target}"])
+    pr = check_io_path_rules(sources, "", [], [(op, target)])
+    if pr is not None:
+        return Decision(pr.decision, pr.pattern, [f"{op} {target}"])
+    return Decision("allow")
+
+
 def walk(
     node: list[Any], sources: list[dict], tool_name: str, declared: set[str]
 ) -> list[Decision]:
@@ -2366,7 +2506,7 @@ def walk(
         ]
         return [Decision("ask", None, [" ".join(words) or "(arithmetic)"])]
     if head == "redirect":
-        return [Decision("allow")]
+        return [_redirect_node_decision(node, sources)]
     sys.stderr.write(f"[pre-tool-use] unknown AST node kind: {head}\n")
     return [Decision("ask", None, ["(unknown)"])]
 
@@ -2397,6 +2537,22 @@ def evaluate_command(
         if inner.decision != "allow":
             return inner
         words, redirects = stripped_words, stripped_redirects
+
+    # 1c. Command substitution in a non-assignment command → recurse into each
+    # ``$(…)`` body. Pure-assignment commands are left to step 2 (which preserves
+    # the conservative no-recursion path when a redirect is present).
+    if not _is_assignment_only(words):
+        stripped = strip_command_subs(words, redirects)
+        if stripped is None:
+            return Decision("ask", None, [render_match_string(words, redirects)])
+        stripped_words, stripped_redirects, cmdsub_bodies = stripped
+        if cmdsub_bodies:
+            inner = _aggregate(
+                [evaluate(b, sources, tool_name, set(declared)) for b in cmdsub_bodies]
+            )
+            if inner.decision != "allow":
+                return inner
+            words, redirects = stripped_words, stripped_redirects
 
     # 2. Assignment with command-substitution RHS → recurse into the body.
     if not redirects:
@@ -2480,6 +2636,8 @@ def evaluate_command(
             decision = wf
 
     # 6. Implicit allows (no policy rule matched).
+    if decision is None and tool_name == "Bash" and cmd_name in SAFE_BUILTINS:
+        decision = Decision("allow")
     if decision is None and tool_name == "Bash" and cmd_name == "sed" and is_safe_sed(norm):
         decision = Decision("allow")
     if decision is None and tool_name == "Bash" and cmd_name == "sed" and is_safe_sed_in_place(norm, sources):

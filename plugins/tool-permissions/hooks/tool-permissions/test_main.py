@@ -143,10 +143,10 @@ def test_aggregation_pipe_bare_redirect_child():
 
 
 def test_aggregation_unsafe_sibling_filtered():
-    # allow `echo`; the `$(cmd)` sibling is unsafe -> only it is listed as ask.
+    # allow `echo`; the `$(cmd)` sibling's inner command is unknown -> ask names it.
     r = ev("echo hi; echo $(cmd)", src(allow={"Bash": ["^echo"]}))
     assert r.decision == "ask"
-    assert r.cmds == ["echo $(cmd)"]
+    assert r.cmds == ["cmd"]
 
 
 # ---------------------------------------------------------------------------
@@ -569,6 +569,108 @@ def test_procsub_recursion_declared_function():
     s = src(allow={"Bash": [r"^diff(\s|$)", r"^tr(\s|$)"]})
     cmd = "f() { tr a b < /tmp/in; }\ndiff <(f) <(f)"
     assert ev(cmd, s).decision == "allow"
+
+
+# ---------------------------------------------------------------------------
+# 8c. Command-substitution recursion
+# ---------------------------------------------------------------------------
+
+
+def test_cmdsub_recursion_allow():
+    # `$()` executes inside double quotes, so the allow-listed `dirname` is
+    # recursed into and the whole `basename …` is auto-allowed.
+    s = src(allow={"Bash": [r"^(basename|dirname)\s"]})
+    assert ev('basename "$(dirname "$f")"', s).decision == "allow"
+
+
+def test_cmdsub_recursion_deny():
+    # deny propagates out of the substitution — the outer `echo` allow never
+    # masks it, and the prompt names the inner command.
+    s = src(allow={"Bash": [r"^echo(\s|$)"]}, deny={"Bash": ["^ssh host"]})
+    r = ev('echo "$(ssh host)"', s)
+    assert r.decision == "deny"
+    assert r.cmds == ["ssh host"]
+
+
+def test_cmdsub_recursion_ask():
+    # ask propagates out of the substitution, and the prompt names the inner command.
+    s = src(allow={"Bash": [r"^echo(\s|$)"]})
+    r = ev('echo "$(git push)"', s)
+    assert r.decision == "ask"
+    assert r.cmds == ["git push"]
+
+
+def test_cmdsub_recursion_nested():
+    # nested `$()` — the inner substitution is inside double quotes within the
+    # outer body, and both layers are recursed into.
+    s = src(allow={"Bash": [r"^echo(\s|$)", r"^date(\s|$)"]})
+    assert ev('echo "$(date "$(date)")"', s).decision == "allow"
+
+
+def test_cmdsub_recursion_unbalanced_ask():
+    assert ev('echo "$(cmd"').decision == "ask"
+
+
+def test_cmdsub_recursion_single_quoted_literal():
+    # a single-quoted `$(` is literal text, not a substitution — `echo` stays allow.
+    s = src(allow={"Bash": [r"^echo(\s|$)"]})
+    assert ev("echo '$(rm -rf ~)'", s).decision == "allow"
+
+
+def test_cmdsub_redirect_target_ask():
+    # `$()` in a redirect target is not recursed (only command words are); the
+    # substitution runs and names the file, so the target is unverifiable and
+    # must fail closed — for read targets too, not just writes.
+    s = src(allow={"Bash": [r"^cat(\s|$)", r"^echo(\s|$)"]})
+    assert ev("cat < $(echo foo)", s).decision == "ask"
+    assert ev("cat < $(rm -rf /tmp/x)", s).decision == "ask"
+    # a `/tmp/`-prefixed write target with a substitution is also unverifiable:
+    # `echo` is allow-listed, so only the redirect-target substitution guard can
+    # produce the ask here.
+    assert ev("echo hi > /tmp/$(date +%s)", s).decision == "ask"
+
+
+# ---------------------------------------------------------------------------
+# 8d. Safe builtins + compound-node redirects
+# ---------------------------------------------------------------------------
+
+
+def test_safe_builtins_allowed():
+    for c in ["continue", "continue 2", "break", "return", "exit", "exit 1", "shift", ":"]:
+        assert ev(c).decision == "allow"
+    # `read` runs nothing external; its stdin comes via a redirect, which the
+    # redirect path-check still vets.
+    assert ev('read -ra parts <<< "$x"').decision == "allow"
+
+
+def test_safe_builtin_read_guard():
+    # auto-allowing `read` must not open a read bypass: a redirect target is
+    # still checked against Read rules.
+    s = src(deny={"Read": [f"^{HOME_RE}/\\.ssh/.*$"]})
+    assert ev("read x < ~/.ssh/id_rsa", s).decision == "deny"
+
+
+def test_compound_redirect_write():
+    # a write redirect on a compound node is no longer silently allowed: the
+    # structural guard downgrades to ask for a non-safe target…
+    s = src(allow={"Bash": [r"^echo(\s|$)"]})
+    assert ev("{ echo hi; } > ~/.bashrc", s).decision == "ask"
+    # …and a safe-prefix target still reaches the mutating deny rules.
+    s2 = src(allow={"Bash": [r"^echo(\s|$)"]}, deny={"Write": ["^/tmp/secret$"]})
+    assert ev("{ echo hi; } > /tmp/secret", s2).decision == "deny"
+
+
+def test_compound_redirect_read():
+    # a read redirect on a loop is checked against Read rules (would have been
+    # silently allowed before the compound-redirect fix).
+    s = src(allow={"Bash": [r"^echo(\s|$)"]}, deny={"Read": [f"^{HOME_RE}/\\.ssh/.*$"]})
+    assert ev("while read x; do echo $x; done < ~/.ssh/id_rsa", s).decision == "deny"
+
+
+def test_xargs_still_asks():
+    # bare `xargs` is deliberately kept ask (documented + explicit ask bucket).
+    assert ev("xargs").decision == "ask"
+    assert ev("xargs -n1").decision == "ask"
 
 
 # ---------------------------------------------------------------------------

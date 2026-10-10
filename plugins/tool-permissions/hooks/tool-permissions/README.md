@@ -343,6 +343,18 @@ or a write redirect still fails closed to _ask_). A bare modifier (`export`) or
 bare wrapper (`env`, `timeout`) is *not* assignment-only: it prints the
 environment or is an opaque wrapper, so it keeps the fail-closed _ask_.
 
+### Safe builtins
+
+A small curated set of shell builtins / reserved words that run no external
+command and touch no named file (only stdin/stdout/fds, which redirect
+path-checking covers) is implicitly **allowed**: `continue`, `break`, `return`,
+`exit`, `shift`, `:`, and `read`. They no longer prompt — `continue`, `read -ra parts
+<<< "$x"`, and a bare `:` are auto-allowed. The usual structural and
+path-argument guards still run on the allow, so `read x < ~/.ssh/id_rsa` is
+still **denied** by the Read rule. Deliberately **excluded** (they execute code,
+read named files, or send signals, so they stay fail-closed to _ask_): `eval`,
+`source`/`.`, `exec`, `command`, `builtin`, `time`, `trap`, `enable`, `kill`.
+
 ## Structural allow guard
 
 A prefix allow-rule can only vouch for the start of a command, not its
@@ -353,16 +365,19 @@ heredoc-body token quote-aware (constructs inside single quotes are ignored;
 inside double quotes only substitution is flagged; a backslash escapes the next
 character):
 
-- command substitution `$(…)` / `` `…` `` (also detected inside double quotes)
+- command substitution `` `…` `` (backticks — also detected inside double quotes)
+- a `$(…)` left in a **redirect target** (a substitution in a command word is
+  recursed into and stripped before this guard runs — see below)
 - prompt-string expansion `${x@P}`
 - write-redirection to a real path — ops `>`, `>>`, `>|`, `&>`, `&>>`, and `>&`
   with a **string** target. `>/dev/null` is exempt, as are `/tmp/` targets; fd
   dups/closes (`>& 1`, `>&- 0`, `<& 0`) are int targets and safe. The here-string
   `<<<` is safe.
 
-Process substitution `<(…)` / `>(…)` is **not** flagged here — it is recursed
-into instead (see below), so the inner command is vetted directly rather than
-merely downgrading the whole command to _ask_.
+Process substitution `<(…)` / `>(…)` and command substitution `$(…)` in command
+words are **not** flagged here — they are recursed into instead (see below), so
+the inner command is vetted directly rather than merely downgrading the whole
+command to _ask_.
 
 **Quirk fix — arithmetic no longer flagged.** `$((arithmetic))` is no longer
 flagged as command substitution. rable distinguishes arithmetic expansion from
@@ -410,6 +425,22 @@ Functions declared earlier in the source are visible inside a body (a copy of
 the declared set is passed, mirroring the `$()` assignment recursion), and
 nesting works: `diff <(cat <(echo hi))` recurses through both levels. This lets a
 safe `diff <(tr … < /tmp/a) <(tr … < /tmp/b)` auto-allow instead of prompting.
+
+### Command substitution
+
+`$(…)` runs its body as a command, so — like process substitution — the hook
+recurses into each body rather than merely downgrading the whole command to
+_ask_. Bodies are extracted quote-aware (a single-quoted `$(` is literal text,
+not a substitution; `$((…))` arithmetic is skipped; backticks are **not**
+recursed and stay flagged by the structural guard → _ask_), re-parsed, and
+evaluated as their own Bash source; the substitution is then stripped from the
+outer command (replaced with `""`, so the word keeps its shape and `^basename\s`
+still matches), which is matched and path-checked on the residue. A deny or ask
+in any body propagates (deny > ask > allow), and an unbalanced `$(` fails closed
+to _ask_. This turns `basename "$(dirname "$f")"` into an auto-allow: the inner
+`dirname "$f"` is allow-listed and recursed, and the stripped `basename ""`
+matches `^basename\s`. Only command **words** are recursed, not redirect targets
+— a `$()` in a redirect target stays flagged by the structural guard → _ask_.
 
 ## sed safety
 
@@ -577,6 +608,12 @@ input (Read), `>`, `>>`, `>|`, `&>`, `&>>`, and `>& file` are outputs
 (mutating) — so `cat a > ~/.ssh/id_rsa` is governed by Edit/Write rules.
 Heredoc delimiters (`<<`, `<<-`) and here-string content (`<<<`) are literal
 strings, not file paths, so they are not checked.
+
+A redirect attached to a **compound** command (`{ …; }`, `( … )`, `while`,
+`for`, `if`, `case`, `function`) is emitted by rable as a separate node and is
+path-checked the same way — `{ echo hi; } > ~/.bashrc` and
+`while read x; done < ~/.ssh/id_rsa` are both caught, closing the previous gap
+where a compound-node redirect was silently allowed.
 
 - If the highest-priority source with an opinion on that path says
   **deny**/**ask**, the command is denied/asked.
