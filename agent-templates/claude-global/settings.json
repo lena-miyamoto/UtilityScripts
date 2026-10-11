@@ -6,11 +6,10 @@
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-flash",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro",
-    "ANTHROPIC_MODEL": "sonnet",
-    "ANTHROPIC_DEFAULT_MODEL": "sonnet",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL": "deepseek-v4-pro",
+    "ANTHROPIC_DEFAULT_MODEL": "deepseek-flash",
     "FORCE_HYPERLINK": "1",
     "CLAUDE_CODE_NO_FLICKER": "1",
-    "CLAUDE_CODE_EFFORT_LEVEL": "high",
     "CLAUDE_CODE_RETRY_WATCHDOG": "1",
     "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
     "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000",
@@ -36,17 +35,17 @@
     ],
     "defaultMode": "default"
   },
-  "model": "sonnet",
+  "spinnerVerbs": {
+    "mode": "replace",
+    "verbs": ["Processing"]
+  },
   "disableClaudeAiConnectors": true,
   "disableBundledSkills": true,
   "disableRemoteControl": true,
   "disableWorkflows": true,
   "disableArtifact": true,
   "disableSideloadFlags": true,
-  "spinnerVerbs": {
-    "mode": "replace",
-    "verbs": ["Processing"]
-  },
+  "autoMemoryEnabled": false,
   "awaySummaryEnabled": false,
   "tui": "fullscreen",
   "disableAutoMode": "disable",
