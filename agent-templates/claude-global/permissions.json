@@ -95,7 +95,7 @@
       "^unzip(\\s|$)",
       "^zipinfo(\\s|$)",
       "^7z (l|t)\\s",
-      "^(pandoc|html2text|pdftotext)(\\s|$)",
+      "^(pandoc|html2text|pdftotext|iconv)(\\s|$)",
       "^(mutool|tesseract)(\\s|$)",
       "^yt-dlp(\\s|$)"
     ]
@@ -157,7 +157,7 @@
     "Bash": [
       "^git (-C ['\\\"]?\\S+['\\\"]? )*(add|commit|push)(\\s|$)",
       "^(curl|wget)\\s",
-      "^(tee|xargs)(\\s|$)",
+      "^xargs(\\s|$)",
       "^mlr\\s",
       "^chmod +x\\s",
       "^node (-[ep]|--eval)\\s",

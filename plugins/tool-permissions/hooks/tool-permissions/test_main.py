@@ -465,6 +465,33 @@ def test_assignment_only_allowed():
     assert ev("X=1 > /dev/null").decision == "allow"
 
 
+def test_bare_wrapper_named_not_blank():
+    # A wrapper stripped to nothing (`env`, `env FOO=1`, bare `timeout`) leaves no
+    # command name, so the match string was blank; the ask prompt must instead
+    # name the command. `env` still asks (it prints the environment).
+    r = ev("env")
+    assert r.decision == "ask"
+    assert r.cmds == ["env"]
+    assert ev("env FOO=1").cmds == ["env FOO=1"]
+    assert ev("timeout 5").cmds == ["timeout 5"]
+
+
+def test_wrapper_in_pipeline_no_blank_prompt():
+    # `env` as a pipeline head used to normalize to an empty command and surface
+    # as a blank "" line in the ask prompt (the grep sub-command is unknown here).
+    r = ev("env | grep -i foo")
+    assert r.decision == "ask"
+    assert r.cmds == ["env", "grep -i foo"]
+
+
+def test_lone_allowed_substitution_named_not_blank():
+    # `$(echo hi)` recurses into `echo hi` (allowed), leaving the outer command
+    # with no name; the ask must show the original command, not a blank line.
+    r = ev("$(echo hi)", src(allow={"Bash": [r"^echo(\s|$)"]}))
+    assert r.decision == "ask"
+    assert r.cmds == ["$(echo hi)"]
+
+
 def test_assignment_line_not_in_prompt():
     # Regression: the assignment `ids="$1"` inside a function body used to
     # normalize to an empty command and surface as a blank "" line in the ask
@@ -1249,6 +1276,74 @@ def test_project_file_op_policy_wins(monkeypatch):
 def test_project_file_op_no_project_dir(monkeypatch):
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
     assert ev("rm " + PROJ + "/foo").decision == "ask"
+
+
+def test_project_file_op_outside_mutation_allowlisted(monkeypatch):
+    # A Bash file op against a target mutation-allow-listed outside the project
+    # (the global `^/tmp/` allow) is auto-allowed instead of asking.
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", PROJ)
+    s = src(allow={"Write": ["^/tmp/"]})
+    assert main.evaluate_project_file_op(["cp", "/tmp/a", "/tmp/b"], [s], PROJ).decision == "allow"
+    assert main.evaluate_project_file_op(["mv", "/tmp/a", "/tmp/b"], [s], PROJ).decision == "allow"
+    assert main.evaluate_project_file_op(["rm", "/tmp/x"], [s], PROJ).decision == "allow"
+    # Outside the project and NOT mutation-allow-listed: still asks.
+    assert main.evaluate_project_file_op(["cp", "/tmp/a", "/etc/b"], [s], PROJ) is None
+    assert main.evaluate_project_file_op(["cp", HOME + "/x", "/tmp/b"], [s], PROJ) is None
+
+
+def test_cp_tmp_allowlisted_end_to_end(monkeypatch):
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", PROJ)
+    s = src(allow={"Write": ["^/tmp/"]})
+    assert ev("cp /tmp/orig.md /tmp/copy.md", s).decision == "allow"
+
+
+def test_project_file_op_sensitive_dir_allowlisted(monkeypatch):
+    # A `.claude`/`.git` path is normally un-vettable in bulk and asks, but a
+    # specific path mutation-allow-listed (e.g. `.claude/**/*.md`) is trusted.
+    monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: False)
+    s = src(allow={"Write": [r"^/work/\.claude/.*\.md$"]})
+    assert main.evaluate_project_file_op(["rm", "/work/.claude/foo.md"], [s], "/work").decision == "allow"
+    # The allow-listed destination is trusted, but an untracked non-allow-listed
+    # source still gates the copy.
+    assert main.evaluate_project_file_op(["cp", "/work/a.md", "/work/.claude/b.md"], [s], "/work") is None
+    # Non-.md and non-allow-listed paths in the sensitive dir still ask.
+    assert main.evaluate_project_file_op(["rm", "/work/.claude/foo.txt"], [s], "/work") is None
+    assert main.evaluate_project_file_op(["rm", "/work/.claude/settings.json"], [s], "/work") is None
+    assert main.evaluate_project_file_op(["rm", "/work/.git/config"], [s], "/work") is None
+
+
+def test_project_file_op_tee_allowlisted_end_to_end(monkeypatch):
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work")
+    monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: False)
+    s = src(allow={"Write": [r"^/work/\.claude/.*\.md$"]})
+    assert ev("tee .claude/foo.md < /tmp/a.md", s).decision == "allow"
+    assert ev("tee .claude/foo.txt < /tmp/a.md", s).decision == "ask"
+    assert ev("tee -a .claude/notes/x.md < /tmp/a.md", s).decision == "allow"
+
+
+def test_redirect_to_mutation_allowlisted_target(monkeypatch):
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(
+        allow={"Bash": [r"^echo(\s|$)"], "Write": [r"^/work/\.claude/.*\.md$"]},
+    )
+    assert ev("echo hi > /work/.claude/foo.md", s).decision == "allow"
+    assert ev("echo hi >> /work/.claude/notes/foo.md", s).decision == "allow"
+    # A target that is not mutation-allow-listed still asks.
+    assert ev("echo hi > /work/.claude/foo.txt", s).decision == "ask"
+    assert ev("echo hi > /work/other/foo.md", s).decision == "ask"
+    # A substitution in the write target still fails closed.
+    assert ev("echo hi > /work/.claude/$(x).md", s).decision == "ask"
+
+
+def test_redirect_allowlisted_target_deny_blocks_allow(monkeypatch):
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    global_allow = src(
+        allow={"Bash": [r"^echo(\s|$)"], "Write": [r"^/work/\.claude/.*\.md$"]}
+    )
+    project_deny = src(deny={"Write": [r"^/work/\.claude/secret\.md$"]})
+    # A higher-priority deny on the target blocks the auto-allow; the redirect
+    # targets a non-safe path, so it fails closed to ask rather than deny.
+    assert ev("echo hi > /work/.claude/secret.md", project_deny, global_allow).decision == "ask"
 
 
 def test_project_file_op_untracked_asks(monkeypatch):

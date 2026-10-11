@@ -90,7 +90,7 @@ SAFE_SED_LONG_FLAGS = frozenset(
 )
 
 # Commands eligible for the project-relative file-op fallback.
-PROJECT_FILE_OP_COMMANDS = {"cp", "rm", "rmdir", "mv"}
+PROJECT_FILE_OP_COMMANDS = {"cp", "rm", "rmdir", "mv", "tee"}
 
 # Output-value flags per command: the flag's value is a written/created path (an
 # output operand), not a read input. Tuple = (equals-form prefixes `--output=…`,
@@ -121,7 +121,7 @@ LAST_ARG_IS_OUTPUT = {"cp", "mv", "rsync", "install", "ln"}
 OUTPUT_FLAG_COMMANDS = {"pandoc", "mutool", "yt-dlp", "unzip", "curl", "wget"}
 
 # Commands that write/create/delete every operand (all outputs).
-ALL_OUTPUT_COMMANDS = {"rm", "rmdir", "unlink", "truncate", "shred", "mkdir"}
+ALL_OUTPUT_COMMANDS = {"rm", "rmdir", "unlink", "truncate", "shred", "mkdir", "tee"}
 
 # Commands whose FIRST positional operand is read and SECOND is written.
 FIRST_INPUT_SECOND_OUTPUT = {"pdftotext", "tesseract"}
@@ -444,12 +444,27 @@ def _unsafe_text(s: str) -> bool:
     return False
 
 
-def _unsafe_redirect(op: str, target: str) -> bool:
-    """True if a redirect op/target is a write-op escape."""
+def _redirect_target_allowlisted(sources: list[dict], target: str) -> bool:
+    """True if a redirect's write target is explicitly allow-listed for mutation."""
+    t = unquote_word(target)
+    if not t:
+        return False
+    return _path_allowlisted_for_mutation(sources, _resolve_path(t))
+
+
+def _unsafe_redirect(op: str, target: str, sources: Optional[list[dict]] = None) -> bool:
+    """True if a redirect op/target is a write-op escape.
+
+    When `sources` is given, a write target explicitly allow-listed for mutation
+    (e.g. the global `^/tmp/` or `.claude/**/*.md` allow) is treated as safe,
+    mirroring the file-tool rules.
+    """
     if isinstance(target, int):
         return False  # fd dup/close, never a file write
     if op in WRITE_REDIRECT_OPS:
         if target.startswith(SAFE_REDIRECT_PREFIXES):
+            return False
+        if sources is not None and _redirect_target_allowlisted(sources, target):
             return False
         return True
     if op == ">&":
@@ -458,23 +473,33 @@ def _unsafe_redirect(op: str, target: str) -> bool:
             return False
         if target.startswith(SAFE_REDIRECT_PREFIXES):
             return False
+        if sources is not None and _redirect_target_allowlisted(sources, target):
+            return False
         return True
     return False
 
 
-def unsafe_construct(words: list[str], redirects: list[tuple[str, str]]) -> bool:
-    """Structural allow guard: reject command substitution / procsub / writes."""
+def unsafe_construct(
+    words: list[str],
+    redirects: list[tuple[str, str]],
+    sources: Optional[list[dict]] = None,
+) -> bool:
+    """Structural allow guard: reject command substitution / procsub / writes.
+
+    With `sources`, a write redirect to an explicitly mutation-allow-listed path
+    is not treated as a write escape (the path is trusted for modification).
+    """
     for w in words:
         if _unsafe_text(w):
             return True
     for op, target in redirects:
-        if _unsafe_redirect(op, target):
+        if _unsafe_redirect(op, target, sources):
             return True
         # A redirect target is expanded by bash: heredoc bodies and here-string
         # content, plus any `$(…)`/backtick/`${x@P}` in a read target such as
         # `cat < "$(…)` (a write target is already caught by _unsafe_redirect,
-        # but a `/tmp/`-prefixed write still needs this to catch the substitution).
-        # fd dups/closes are int targets and carry no expansion.
+        # but an allow-listed write target still needs this to catch the
+        # substitution). fd dups/closes are int targets and carry no expansion.
         if not isinstance(target, int) and _unsafe_text(target):
             return True
     return False
@@ -2116,7 +2141,8 @@ def _path_allowlisted_for_mutation(sources: list[dict], path: str) -> bool:
 def evaluate_project_file_op(
     norm: list[str], sources: list[dict], project_dir: str
 ) -> Optional[Decision]:
-    """Fallback allow for cp/rm/rmdir/mv/gio trash inside the project dir."""
+    """Fallback allow for cp/rm/rmdir/mv/gio trash inside the project dir, or
+    against an explicitly mutation-allow-listed target outside it (e.g. `^/tmp/`)."""
     name = _cmd_name(norm)
     if name in PROJECT_FILE_OP_COMMANDS:
         after = norm[1:]
@@ -2131,11 +2157,11 @@ def evaluate_project_file_op(
     if not args:
         return None
     project_root = os.path.abspath(project_dir)
-    # Which operands the command removes: `cp` removes none (source is read);
-    # `mv` removes its sources (the destination is the -t/--target-directory
-    # value if present, else the last positional); rm/rmdir/gio-trash remove
-    # every operand.
-    if name == "cp":
+    # Which operands the command removes: `cp`/`tee` remove none (cp reads its
+    # source, tee overwrites); `mv` removes its sources (the destination is the
+    # -t/--target-directory value if present, else the last positional);
+    # rm/rmdir/gio-trash remove every operand.
+    if name in ("cp", "tee"):
         destructive = [False] * len(args)
     elif name == "mv":
         dest_idx = output_idx if output_idx is not None else len(args) - 1
@@ -2148,8 +2174,19 @@ def evaluate_project_file_op(
         if is_destructive and abs_p == project_root:
             return Decision("deny", None, [arg])
         if abs_p != project_root and not abs_p.startswith(project_root + "/"):
-            return None
-        if _touches_sensitive_project_dir(abs_p):
+            # Outside the project: only a target explicitly allow-listed for
+            # mutation (e.g. the global `^/tmp/` allow) may be written/deleted
+            # from here; anything else falls through to ask.
+            if not _path_allowlisted_for_mutation(sources, abs_p):
+                return None
+            resolved.append(abs_p)
+            continue
+        # A `.claude`/`.git` path is un-vettable in bulk, so it falls through to
+        # ask — unless the specific path is explicitly mutation-allow-listed
+        # (e.g. `.claude/**/*.md`), which the user has trusted for modification.
+        if _touches_sensitive_project_dir(abs_p) and not _path_allowlisted_for_mutation(
+            sources, abs_p
+        ):
             return None
         resolved.append(abs_p)
     # Input/output-aware deny/ask: Read rules for read operands, mutating rules
@@ -2441,7 +2478,7 @@ def _redirect_node_decision(node: list[Any], sources: list[dict]) -> Decision:
     """
     op = node[1]
     target = node[2]
-    if unsafe_construct([], [(op, target)]):
+    if unsafe_construct([], [(op, target)], sources):
         return Decision("ask", None, [f"{op} {target}"])
     pr = check_io_path_rules(sources, "", [], [(op, target)])
     if pr is not None:
@@ -2520,6 +2557,9 @@ def evaluate_command(
     # 1. Empty command (or comment-only) → allow.
     if not words and not redirects:
         return Decision("allow")
+    # Pre-strip rendering, kept as the display fallback for a match string that
+    # normalizes away (see step 2c).
+    raw_match = render_match_string(words, redirects)
 
     # 1b. Process substitution → recurse into each `<(`/`>(` body. The inner
     # command runs in a subshell, so it must be vetted exactly like a direct
@@ -2567,13 +2607,22 @@ def evaluate_command(
     # so nothing external runs. Allow it unless a substitution or write-redirect
     # hazard remains (the single-`$(…)` form was already recursed in step 2).
     if _is_assignment_only(words):
-        if unsafe_construct(words, redirects):
+        if unsafe_construct(words, redirects, sources):
             return Decision("ask", None, [render_match_string(words, redirects)])
         return Decision("allow")
 
     norm = normalize_words(words)
     match = render_match_string(norm, redirects)
     cmd_name = _cmd_name(norm)
+
+    # 2c. Wrapper stripped to nothing (`env`, `env FOO=1`, `timeout 5`, bare
+    # `exec`/`builtin`/`nohup`) — or a lone command substitution that was
+    # recursed and stripped — leaves no command name, so the match string is
+    # blank. Fall back to the pre-strip rendering so an ask (e.g. bare `env`,
+    # which prints the environment) names the command instead of rendering an
+    # empty line. The decision itself is unchanged.
+    if not match:
+        match = raw_match
 
     # `eval` re-parses its argument string as shell code (and `builtin eval` /
     # `command eval` strip down to it), so its inner commands are invisible to the
@@ -2583,7 +2632,7 @@ def evaluate_command(
 
     # 3. stdin-only sed fast path.
     if tool_name == "Bash" and cmd_name == "sed" and is_safe_sed_stdin_only(norm):
-        if unsafe_construct(words, redirects):
+        if unsafe_construct(words, redirects, sources):
             return Decision("ask", None, [match])
         if edits_protected_file(tool_name, match):
             return Decision("ask", None, [match])
@@ -2596,7 +2645,7 @@ def evaluate_command(
             deny = prioritized_opinion(sources, "Bash", match)
             if deny is not None and deny.decision == "deny":
                 return deny
-            if unsafe_construct(words, redirects):
+            if unsafe_construct(words, redirects, sources):
                 return Decision("ask", None, [match])
             # Delegating drops `-a FILE`'s value and the outer redirect targets,
             # both of which xargs reads. Re-apply the read-path protection on them
@@ -2652,7 +2701,7 @@ def evaluate_command(
     # 7. Guards on allow decisions + explicit result.
     if decision is not None:
         if decision.decision == "allow":
-            if tool_name == "Bash" and unsafe_construct(words, redirects):
+            if tool_name == "Bash" and unsafe_construct(words, redirects, sources):
                 return Decision("ask", None, [match])
             if tool_name == "Bash" and norm:
                 pr = check_io_path_rules(sources, cmd_name, norm, redirects)

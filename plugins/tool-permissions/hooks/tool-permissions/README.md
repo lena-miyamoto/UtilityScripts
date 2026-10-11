@@ -341,7 +341,9 @@ A command that is *only* assignments — no command name at all (`ids="$1"`,
 outright (the single-`$(…)` form is recursed into first; a quoted substitution
 or a write redirect still fails closed to _ask_). A bare modifier (`export`) or
 bare wrapper (`env`, `timeout`) is *not* assignment-only: it prints the
-environment or is an opaque wrapper, so it keeps the fail-closed _ask_.
+environment or is an opaque wrapper, so it keeps the fail-closed _ask_. Such a
+bare wrapper leaves no command name, so its match string falls back to the
+original command text — the ask names `env` instead of rendering a blank line.
 
 ### Safe builtins
 
@@ -577,7 +579,7 @@ The input/output split is per-argument and follows standard CLI conventions:
 
 - read-only commands (`grep`, `cat`, `head`, `tail`, `cut`, `sort`, `uniq`,
   `comm`, `join`, `cmp`, `wc`, `ls`, `diff`, `file`, `stat`, `jq`, `rg`,
-  `html2text`, `tr`, …) treat every operand as an **input**;
+  `html2text`, `tr`, `iconv`, …) treat every operand as an **input**;
 - `cp`, `install`, `ln`, and `rsync` treat the last operand (or cp/mv's
   `-t DIR`/`--target-directory[=]DIR`) as the **output** and the rest as inputs;
 - `mv` treats its sources as **both** (read to move them, then removed) and its
@@ -637,14 +639,16 @@ would reach `~/.ssh/id_rsa`, and `cat //etc/shadow` or
 `cat file:///etc/shadow` would address `/etc/shadow`, without ever
 string-matching the deny pattern anchored on the real path.
 
-## cp/rm/rmdir/mv/gio-trash project-relative auto-allow
+## cp/rm/rmdir/mv/tee/gio-trash project-relative auto-allow
 
-`cp`, `rm`, `rmdir`, `mv`, and `gio trash` have no static allow-rule (a bare
-`rm` or `cp` is too broad to allow-list globally), so by default they fall
+`cp`, `rm`, `rmdir`, `mv`, `tee`, and `gio trash` have no static allow-rule (a
+bare `rm` or `cp` is too broad to allow-list globally), so by default they fall
 through to _ask_. As a narrower alternative, the hook auto-allows one of these
 commands when **every** positional argument (source and destination alike,
-including `cp`/`mv`'s `-t DIR`/`--target-directory=DIR`) resolves to a path
-inside `$CLAUDE_PROJECT_DIR`, and none of the resolved paths are:
+including `cp`/`mv`'s `-t DIR`/`--target-directory=DIR`) resolves either to a
+path inside `$CLAUDE_PROJECT_DIR` or to a path outside it that is explicitly
+allow-listed for mutation (e.g. the global `^/tmp/` allow — so `cp /tmp/a /tmp/b`
+is auto-allowed), and none of the resolved paths are:
 
 - **specifically protected** — the same input/output-aware rule check described
   above: a deny/ask on a **read** operand fires for `Read`, and on a
@@ -652,9 +656,13 @@ inside `$CLAUDE_PROJECT_DIR`, and none of the resolved paths are:
   matched by a `.env`/credential pattern);
 - **inside `.claude/` or `.git`** (at any depth) — a bulk `cp -r .claude
   backup` or `rm -rf .git` can't be vetted per-file the way a single credential
-  path can, so these always fall through to the normal _ask_ default instead
-  of being silently allowed. (`rm -rf .git` is never auto-*denied* by this
-  check — a deliberate one is still just an _ask_ away.)
+  path can, so these fall through to the normal _ask_ default instead of being
+  silently allowed. An explicit allow rule under a mutating file tool for the
+  specific path is the one exception (e.g. the template's
+  `^(?!~/\.claude/).*\.claude/.*\.md$` allow, so `tee .claude/notes.md` is
+  auto-allowed but `cp .claude/settings.json backup` still asks). (`rm -rf .git`
+  is never auto-*denied* by this check — a deliberate one is still just an
+  _ask_ away.)
 - **not git-tracked** — every operand must be committed or staged (checked via
   `git ls-files` against `$CLAUDE_PROJECT_DIR`). Gitignored files, brand-new
   untracked files, and non-repo / git-error / timeout cases all fall through to
@@ -701,7 +709,7 @@ of how safe the plain arguments look.
   (parity with the legacy gap — a truncating-open on an existing file).
 - **`cond` negation `!` is dropped by rable** inside `[[ … ]]`. Lossy, but
   irrelevant to permissions (no command executes in a `cond`).
-- **Bundled short-option value parsing** in the cp/rm/rmdir/mv/gio-trash
+- **Bundled short-option value parsing** in the cp/rm/rmdir/mv/tee/gio-trash
   project-relative check only special-cases `-t`/`--target-directory` on `cp`
   and `mv` (space, `-tDIR`, `--target-directory=DIR`, and bundled `-rtDIR`
   forms are all recognized for those two). Any other value-taking short flag,
@@ -712,7 +720,7 @@ of how safe the plain arguments look.
   `while`/`until`/`for`/`done`/`fi`/`esac`/`case` raise `ParseError` and **ask**.
   A deliberate consequence of the "trust the parser" policy.
 - **The git-tracked gate runs one `git ls-files` subprocess per fallback
-  evaluation.** This applies to each auto-allowed `cp`/`rm`/`rmdir`/`mv`/
+  evaluation.** This applies to each auto-allowed `cp`/`rm`/`rmdir`/`mv`/`tee`/
   `gio trash`, and to each mutating file-tool call (`Write`/`Edit`/`MultiEdit`/
   `NotebookEdit`) that isn't a `~`-backup and isn't a create of a non-existent
   file via `Write`/`NotebookEdit`. `Read` never reaches the gate. It fails
