@@ -2,16 +2,24 @@
 
 System prompt covers: tone/length, no-comments, no speculative abstractions, no impossible-state validation, no backwards-compat shims, root-cause over patch, parallel tool calls, dedicated tools over Bash, sub-agents, memory. **Below = overrides. Hard rules always win.**
 
+## NEVER read `~/.claude/settings.json` (auth-token leak)
+
+Holds `env.ANTHROPIC_AUTH_TOKEN`. Never dump it, whole or partial — every tool, every agent, no exception.
+
+- Need one setting? Project the key, never the file: `jq -r '.env.ANTHROPIC_AUTH_TOKEN | if . then "set" else "unset" end' ~/.claude/settings.json`. Key *names* fine: `jq -r 'paths(scalars) | join(".")' ~/.claude/settings.json`.
+- Never delegate the read to a subagent, paste the file into a prompt or agent brief, or write the value to a file, log, PR body, or issue.
+- **If it leaks anyway:** say so same turn, name the key, recommend rotating at provider. Never re-read.
+
 ## Hard rules
 
-- **Bash templates first, always.** Ad-hoc logic → Bash pipeline of CLI tools, not inline interpreter (`python3 -c`, `node -e`, `perl -e`, throwaway files). Tool-permissions hook auto-evaluates Bash — transparent, cheap to approve; interpreter body opaque, forces review. Python/Node only when Bash can't express it.
-- **Write redirects: literal safe path, not a variable.** Hook parses statically — can't resolve `$VAR` in `> "$BODY"` / `>> "$BODY"`, so variable redirect target = write-op escape, forces prompt even for allow-listed `awk`/`printf`. Redirect to literal path hook recognizes as safe (`/dev/null`, `/tmp/…`), not a variable.
+- **Bash templates first, always.** Ad-hoc logic → Bash pipeline of CLI tools, not inline interpreter (`python3 -c`, `node -e`, `perl -e`, throwaway files) — hook auto-evaluates Bash, cheap to approve; interpreter body opaque, forces review. Python/Node only when Bash can't express it.
+- **Write redirects: literal safe path, not a variable.** Hook parses statically — can't resolve `$VAR` in `> "$BODY"` / `>> "$BODY"`; variable target = write-op escape, forces prompt even for allow-listed `awk`/`printf`. Use literal path hook sees as safe (`/dev/null`, `/tmp/…`).
 - `WebFetch` fails → retry with `wget`/`curl`, prefer `wget` if available.
 - Never invoke tools by absolute path (`/usr/local/bin/uv`). Always use bare command, rely on `PATH` (`uv`).
 - No force-push `main`/`master`/shared branches, no `--no-verify`, no amend pushed commits.
 - Verify real app before claiming fix works. Cannot run → say so, not fake success.
 - `~/` = home dir (`$HOME` on macOS/Linux, `%USERPROFILE%` on Windows). Resolve to absolute path — never pass `~/...` to any tool.
-- **Never print the environment to model context.** `env`, `export -p`, `printenv`, `set`, `declare -p` dump secrets (`ANTHROPIC_AUTH_TOKEN`, tokens). Probe scrubbed instead: `env -i`, `env -u VAR`, or a controlled value (`X=1; export -p X`). Filter/redact output (`grep -E '^VAR='`, `sed 's/=.*/=<redacted>/'`, `wc -l`) rather than dumping.
+- **Never print the environment to model context.** `env`, `export -p`, `printenv`, `set`, `declare -p` dump secrets (`ANTHROPIC_AUTH_TOKEN`, tokens). Probe scrubbed instead: `env -i`, `env -u VAR`, or controlled value (`X=1; export -p X`). Redact output (`grep -E '^VAR='`, `sed 's/=.*/=<redacted>/'`, `wc -l`), never dump. Same token sits in `~/.claude/settings.json` — never dump that either (first section above).
 
 ## Communication
 
@@ -30,11 +38,11 @@ System prompt covers: tone/length, no-comments, no speculative abstractions, no 
 - **Reproduce first**: failing test, repro script, UI steps. No fix without repro unless trivial.
 - **Deictic references** ("this file", "this script", "in here", etc.) → IDE's active file, passed as context.
 - **Ambiguous intent** where wrong guess wastes work → `AskUserQuestion` first. Batch independent questions in one call.
-- **Sequential edits to the same file** → re-read with Read between calls. First edit changes file on disk; later `old_string` must match updated content, not original.
+- **Sequential edits to the same file** → re-read with Read between calls; later `old_string` must match updated content, not original.
 - **Large features** → interview via `AskUserQuestion` before code.
 - **Multi-file / unfamiliar / unclear scope** → Plan mode. Skip for one-line fixes, read-only work, single-purpose scripts, mechanical renames.
 - **3+ unfamiliar files** → dispatch `explorer` sub-agent (if configured). Skip trivial config edits.
-- **Sub-agents: sequential default.** Fan out only if files must be read/edited simultaneously _and_ wait worth token cost. Eval model per task, prefer smaller unless justified. Ask before Opus/Fable fan-outs.
+- **Sub-agents: sequential default.** Fan out only if files must be read/edited simultaneously _and_ wait worth token cost. Eval model per task; prefer smaller unless justified. Ask before Opus/Fable fan-outs.
 - **Never idle on sub-agents unless strictly necessary.** Spawn N−1, do Nth inline. Each re-processes system prompt (costly even cached); 2 idle = double cost. Max 3 concurrent.
 - **Long-running or isolated work** → `worktree` isolation for sub-agents; keep main checkout clean.
 - **Between unrelated tasks** → prefer `/clear` over context pileup.
@@ -53,7 +61,7 @@ System prompt covers: tone/length, no-comments, no speculative abstractions, no 
 
 ### Branch and worktree discipline
 
-- **Never create worktree or switch branches without asking.** Separates working directory from user's view — changes vanish. Applies to `EnterWorktree`, `git worktree add`, `git checkout`, `git switch`, any branch/directory change.
+- **Never create worktree or switch branches without asking.** Working directory differs from user's view — changes vanish. Applies to `EnterWorktree`, `git worktree add`, `git checkout`, `git switch`, any branch/directory change.
 - **Operate on the current branch.** If a task genuinely requires isolation, explain why and ask. Sub-agents needing isolation → default `cwd`, not worktree, unless explicitly approved.
 - **If you entered worktree without asking:** exit immediately (`ExitWorktree`, `action: remove`, `discard_changes: true`), re-apply changes to main branch.
 
