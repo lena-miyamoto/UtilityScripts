@@ -34,8 +34,11 @@ first:
 The **first source with any matching rule decides** (full override). Within one
 source: `allow > ask > deny > default`, regex length irrelevant. A narrow
 `allow` can therefore carve an exception out of a broader `ask` or `deny` zone
-in the same source — e.g. `ask` matches `/?\.agents/` but `allow` matches
-`(?!~/)/?\.agents/.*\.md$`, so `.md` files under `.agents/` are auto-allowed.
+in the same source — e.g. the template's `allow.Read` excludes
+`settings*.json` and `.env` with a negative lookahead so its `ask` rules for
+those paths can still fire; a bare `^{global-conf-dir}/` allow would swallow
+them instead, since `allow` is consulted first (see
+[Shipped global template](#shipped-global-template)).
 Because a higher source wins outright, higher-priority `allow` overrides
 lower-priority `deny` — e.g. `permissions.local.json` can re-allow a
 globally-denied command. Repo-trust prompt gates that loosening. Sources are
@@ -182,6 +185,36 @@ If `permissions.json` is unreadable or stdin can't be parsed the hook fails open
 - **Grouped keys** — file tools may share one entry via a `|`-joined key, e.g.
   `"Read|Write|Edit|MultiEdit": [...]`, expanded to per-tool entries at load.
   Non-file tools (`Bash`, `WebSearch`, `WebFetch`, `Skill`) must appear alone.
+
+### Shipped global template
+
+`agent-templates/claude-global/permissions.json` (installed as the global
+`permissions.json` by `ubuntu-setup.sh`) keys its file rules off
+`{global-conf-dir}` / `{project-dir}` instead of literal `.claude/` paths:
+
+- `allow.Read` — everything under `{global-conf-dir}/` and `{project-dir}/`,
+  minus the guarded names below. Both patterns carry a negative lookahead
+  (`(?!.*settings(\.local)?\.json)`, `(?!.*\.env[^/]*$)`) because `allow` is
+  consulted before `ask`: a bare `^{global-conf-dir}/` would match every path
+  there and the ask rules could never fire.
+- `allow.Write|Edit|MultiEdit|NotebookEdit` — `*.md` under either dir.
+  Non-`.md` mutations have no rule of their own and fall to the default file
+  allow (`_default_file_allow`): inside a project, git-tracked files, new
+  `Write` creates, and `~`-prefixed `*.md`/`*.txt`; inside the config dir,
+  `plans/*.md`; _ask_ otherwise.
+- `ask.Read` — `settings*.json` and `.env` under `{global-conf-dir}/`, plus
+  `.env` anywhere under `{project-dir}/`: the auth-token guard. It fires on both
+  routes — `Read ~/.claude/settings.json` prompts, and so does
+  `cat ~/.claude/settings.json` (the Bash operand check resolves the path
+  through the same `Read` rules via `_rule_opinion_for_paths`).
+- `deny` — `/?\.env[^/]*$` (among others). A `.env` write never reaches `allow`
+  (the lookahead excludes it) and the `ask` bucket has no mutating entries, so
+  `.env` mutations are _deny_; only reading one prompts.
+- Writes under `.agents/` and `.github/` have no rules of their own — their old
+  `ask` entries and `*.md` allows were dropped when the file rules moved to the
+  placeholders — so those paths follow the default file allow: looser for a
+  git-tracked file in a project, stricter for `.md` outside one or edited while
+  untracked.
 
 ### Match targets per tool
 
@@ -659,8 +692,9 @@ is auto-allowed), and none of the resolved paths are:
   path can, so these fall through to the normal _ask_ default instead of being
   silently allowed. An explicit allow rule under a mutating file tool for the
   specific path is the one exception (e.g. the template's
-  `^(?!~/\.claude/).*\.claude/.*\.md$` allow, so `tee .claude/notes.md` is
-  auto-allowed but `cp .claude/settings.json backup` still asks). (`rm -rf .git`
+  `^{global-conf-dir}/.+\.md$` and `^{project-dir}/.+\.md$` allows — so
+  `tee .claude/notes.md` is auto-allowed but `cp .claude/settings.json
+  backup` still asks). (`rm -rf .git`
   is never auto-*denied* by this check — a deliberate one is still just an
   _ask_ away.)
 - **not git-tracked** — every operand must be committed or staged (checked via

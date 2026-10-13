@@ -9,6 +9,7 @@ import json
 import os
 import re
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -2098,3 +2099,169 @@ def test_e2e_diff_procsub_deny(capsys, global_sources):
     assert decide_decision(
         capsys, global_sources, "Bash", {"command": "diff <(cat ~/.ssh/id_rsa)"}
     ) == "deny"
+
+
+# ---------------------------------------------------------------------------
+# 20. Shipped global template (agent-templates/, installed by ubuntu-setup.sh)
+# ---------------------------------------------------------------------------
+
+TEMPLATE = (
+    Path(__file__).resolve().parents[4]
+    / "agent-templates"
+    / "claude-global"
+    / "permissions.json"
+)
+
+
+@pytest.fixture
+def template_sources():
+    """The repo's policy example as the global source the setup script installs."""
+    if not TEMPLATE.is_file():
+        pytest.skip(f"repo template not checked out: {TEMPLATE}")
+    policy = json.loads(TEMPLATE.read_text(encoding="utf-8"))
+    return [main._opinion_to_buckets(policy, PROJ, f"{HOME}/.claude")]
+
+
+@pytest.fixture
+def in_project(monkeypatch):
+    """Anchor the template's relative rules; stub the filesystem and git check."""
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", PROJ)
+    monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: False)
+    # Nothing under PROJ exists, so "create" vs "exists" stays deterministic
+    # regardless of what is on the developer's disk — same stub the
+    # default-file-allow tests use.
+    monkeypatch.setattr(os.path, "exists", lambda p: False)
+    return PROJ
+
+
+def test_template_project_claude_read_allow(capsys, template_sources, in_project):
+    for path in (
+        ".claude/agents/historian.md",
+        ".claude/scripts/utils.py",
+        ".claude/references/frontmatter-fields.md",
+    ):
+        assert decide_decision(
+            capsys, template_sources, "Read", {"file_path": f"{PROJ}/{path}"}
+        ) == "allow", path
+
+
+def test_template_project_claude_mutation_allow(capsys, template_sources, in_project):
+    # The template's mutation allow is `{project-dir}/.+\.md$` — `.md` only.
+    for tool in ("Write", "Edit", "MultiEdit"):
+        for path in (
+            ".claude/agents/historian.md",
+            ".claude/references/frontmatter-fields.md",
+        ):
+            assert decide_decision(
+                capsys, template_sources, tool, {"file_path": f"{PROJ}/{path}"}
+            ) == "allow", (tool, path)
+
+
+def test_template_project_non_md_uses_default(capsys, template_sources, in_project):
+    # Non-`.md` under the project has no allow rule, so it lands on the hook
+    # default (`_default_file_allow`): `Edit` asks — the fixture stubs the
+    # git-tracked check to False, matching an untracked file — while `Write` of
+    # a path that doesn't exist yet is a pure create and is allowed.
+    for path in (".claude/scripts/utils.py", ".claude/references/x.yaml"):
+        assert decide_decision(
+            capsys, template_sources, "Edit", {"file_path": f"{PROJ}/{path}"}
+        ) == "ask", path
+    assert decide_decision(
+        capsys,
+        template_sources,
+        "Write",
+        {"file_path": f"{PROJ}/.claude/scripts/new-script.py"},
+    ) == "allow"
+
+
+def test_template_project_claude_bash_read_allow(capsys, template_sources, in_project):
+    # The reported case: reading a subagent spec with `sed`, stderr dropped.
+    assert decide_decision(
+        capsys,
+        template_sources,
+        "Bash",
+        {"command": "sed -n '/Mandatory File Loads/,/^## /p' .claude/agents/historian.md 2>/dev/null"},
+    ) == "allow"
+
+
+def test_template_project_claude_self_protection_asks(
+    capsys, template_sources, in_project, monkeypatch
+):
+    # The hook's own policy/registration files stay _ask_ however broad the
+    # allow is (hard-coded guard, see Self-protection guard). Tracked here so
+    # the default file allow would fire on its own — the guard, not the
+    # git-tracked gate, has to be what forces the ask.
+    monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: True)
+    for name in (
+        "settings.json",
+        "settings.local.json",
+        "permissions.json",
+        "permissions.local.json",
+    ):
+        assert decide_decision(
+            capsys, template_sources, "Edit", {"file_path": f"{PROJ}/.claude/{name}"}
+        ) == "ask", name
+
+
+def test_template_project_claude_env_denied(capsys, template_sources, in_project):
+    # `allow` carries a `.env` lookahead, so a `.env` mutation never matches it;
+    # the `ask` bucket has no mutating entries and its `.env` rules are
+    # `Read`-only — so these land on the deny rule (`/?\.env[^/]*$`).
+    for path in (".claude/.env", ".claude/nested/.env.local"):
+        assert decide_decision(
+            capsys, template_sources, "Edit", {"file_path": f"{PROJ}/{path}"}
+        ) == "deny", path
+
+
+def test_template_global_conf_dir_mutation(capsys, template_sources, in_project):
+    # `{global-conf-dir}/.+\.md$` allow-lists `.md` edits in the global config
+    # dir — wider than the hook default, which allows only `plans/*.md` there.
+    assert decide_decision(
+        capsys, template_sources, "Edit", {"file_path": f"{HOME}/.claude/notes.md"}
+    ) == "allow"
+    # Non-`.md` in the config dir still asks (default; the settings files also
+    # hit the self-protection guard).
+    for name in ("settings.json", "notes.txt", "todos.yaml"):
+        assert decide_decision(
+            capsys, template_sources, "Edit", {"file_path": f"{HOME}/.claude/{name}"}
+        ) == "ask", name
+
+
+def test_template_global_settings_read_asks(capsys, template_sources, in_project):
+    # The token lives in `env.ANTHROPIC_AUTH_TOKEN` of the global settings file.
+    # `allow.Read` excludes `settings*.json` and `.env` with a negative
+    # lookahead, so these reach the `ask` bucket — `prioritized_opinion` walks
+    # `allow` first, and without that carve-out the broad `^{global-conf-dir}/`
+    # allow would swallow the ask.
+    for name in ("settings.json", "settings.local.json", "settings.json.bak"):
+        assert decide_decision(
+            capsys, template_sources, "Read", {"file_path": f"{HOME}/.claude/{name}"}
+        ) == "ask", name
+    # `.env` reads prompt too, wherever they sit under either dir; writing one
+    # stays denied (test above).
+    for path in (f"{HOME}/.claude/.env", f"{PROJ}/.claude/.env", f"{PROJ}/.env"):
+        assert decide_decision(
+            capsys, template_sources, "Read", {"file_path": path}
+        ) == "ask", path
+    # Reads elsewhere under the config dir stay allowed, and only the config dir
+    # is guarded — a project's own settings file is not.
+    assert decide_decision(
+        capsys, template_sources, "Read", {"file_path": f"{HOME}/.claude/notes.md"}
+    ) == "allow"
+    assert decide_decision(
+        capsys, template_sources, "Read", {"file_path": f"{PROJ}/.claude/settings.json"}
+    ) == "allow"
+
+
+def test_template_global_settings_bash_read_asks(capsys, template_sources, in_project):
+    # The io-path check applies the Read rule to the operand via
+    # `_rule_opinion_for_paths` (deny > ask > None — `allow` is not consulted),
+    # so the `cat`/`jq` that leaked the token prompts instead of printing it:
+    # the one route where the guard does fire.
+    for cmd in (
+        f"cat {HOME}/.claude/settings.json",
+        f"jq -r '.enabledPlugins | keys' {HOME}/.claude/settings.json",
+    ):
+        assert decide_decision(
+            capsys, template_sources, "Bash", {"command": cmd}
+        ) == "ask", cmd

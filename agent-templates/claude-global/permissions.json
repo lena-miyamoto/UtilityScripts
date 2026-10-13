@@ -2,12 +2,11 @@
   "$schema": "./hooks/tool-permissions/permissions.schema.json",
   "version": 1,
   "allow": {
-    "Read": ["/?\\.agents/", "/?\\.claude/", "/?\\.github/"],
-    "Write|Edit|MultiEdit|NotebookEdit": [
-      "/?\\.agents/.*\\.md$",
-      "^(?!~/\\.claude/).*\\.claude/.*\\.md$",
-      "/?\\.github/.*\\.md$"
+    "Read": [
+      "^{global-conf-dir}/(?!.*settings(\\.local)?\\.json)(?!.*\\.env[^/]*$).*$",
+      "^{project-dir}/(?!.*\\.env[^/]*$).*$"
     ],
+    "Write|Edit|MultiEdit|NotebookEdit": ["^{global-conf-dir}/.+\\.md$", "^{project-dir}/.+\\.md$"],
     "Read|Write|Edit|MultiEdit|NotebookEdit": ["^/tmp/"],
     "WebSearch": [],
     "WebFetch": [
@@ -153,7 +152,11 @@
     ]
   },
   "ask": {
-    "Write|Edit|MultiEdit|NotebookEdit": ["/?\\.agents/", "/?\\.claude/(?!tmp/)", "/?\\.github/"],
+    "Read": [
+      "^{global-conf-dir}/.*settings(\\.local)?\\.json",
+      "^{global-conf-dir}/.*\\.env[^/]*$",
+      "^{project-dir}/.*\\.env[^/]*$"
+    ],
     "Bash": [
       "^git (-C ['\\\"]?\\S+['\\\"]? )*(add|commit|push)(\\s|$)",
       "^(curl|wget)\\s",
