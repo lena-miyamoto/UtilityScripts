@@ -19,6 +19,12 @@ The [`statusline`](plugins/statusline/README.md) plugin ships the custom Claude 
 claude plugin install statusline@lena-miyamoto
 ```
 
+The [`dev-utils`](plugins/dev-utils/README.md) plugin bundles the changeset-review, fix-application, and repo-optimization skills.
+
+```bash
+claude plugin install dev-utils@lena-miyamoto
+```
+
 ## Highlights
 
 **[`ubuntu-setup.sh`](ubuntu-setup.sh)** is the centerpiece. It can take a fresh Ubuntu 24.04 or 26.04 install from stock desktop to a fully configured development and gaming environment in one shot. Two main modes:

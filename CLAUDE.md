@@ -30,10 +30,10 @@ Before committing, verify no confidential values added to tracked files.
 
 ## Plugins
 
-- **Version bump is mandatory after every change under `plugins/`.** Any edit to a plugin must bump its version in three places, kept in sync, before the change is complete:
+- **Version bump is mandatory after every change under `plugins/`.** Any edit to a plugin must bump its version, kept in sync, before the change is complete:
   - `plugins/<plugin>/.claude-plugin/plugin.json` → `version`
   - `.claude-plugin/marketplace.json` → the matching `plugins[]` entry → `version`
-  - the plugin's `pyproject.toml` → `version`
+  - the plugin's `pyproject.toml` → `version` (only when the plugin bundles a Python project)
 
 ## Standalone Utilities
 

@@ -18,6 +18,12 @@
       "source": "./plugins/statusline",
       "description": "Custom Claude Code statusline (main bar + subagent rows).",
       "version": "0.2.0"
+    },
+    {
+      "name": "dev-utils",
+      "source": "./plugins/dev-utils",
+      "description": "Changeset review, fix application, and instruction-file optimization skills for Claude Code.",
+      "version": "0.1.0"
     }
   ]
 }

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "dev-utils",
+  "version": "0.1.0",
+  "description": "Changeset review, fix application, and instruction-file optimization skills for Claude Code.",
+  "author": {
+    "name": "Lena M.",
+    "email": "lena.miyamoto21@gmail.com"
+  }
+}
