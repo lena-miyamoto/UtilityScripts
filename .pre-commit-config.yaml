@@ -1,0 +1,56 @@
+# See https://pre-commit.com for more information.
+# Install once per clone: uv run pre-commit install
+default_stages: [pre-commit]
+
+repos:
+  # Generic file hygiene.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+
+  # Repo tooling only.  Every entry here is `uv run <entry-point>`, never a
+  # bare `ruff`/`rumdl`/`pytest`: uv puts the repo's .venv/bin first on PATH, so
+  # each binary is the pyproject.toml + uv.lock version — a globally installed
+  # ruff/rumdl can never be picked up.  pre-commit itself already runs from the
+  # repo venv (see .git/hooks/pre-commit), so `uv` on PATH is the only host
+  # prerequisite.
+  #
+  # pre-commit runs hooks in the order listed, so every formatter is listed
+  # above every linter: a lint pass always sees formatted content.
+  - repo: local
+    hooks:
+      # --- formatters ------------------------------------------------------
+      - id: ruff-format
+        name: ruff format
+        entry: uv run format
+        language: system
+        files: \.py$
+      # lint-md --fix formats with `rumdl fmt`, then lints with `rumdl check`,
+      # so markdown is formatter-then-linter inside a single entry point.
+      - id: rumdl
+        name: rumdl (lint-md --fix)
+        entry: uv run lint-md --fix
+        language: system
+        files: \.md$
+
+      # --- linters ---------------------------------------------------------
+      # `uv run lint --fix` runs `ruff check --fix`, then `ruff check`, then
+      # `ruff format --check`: autofix, report what remains, verify formatting.
+      - id: ruff-check
+        name: ruff check --fix
+        entry: uv run lint --fix
+        language: system
+        files: \.py$
+
+      # --- tests -----------------------------------------------------------
+      - id: pytest
+        name: pytest
+        entry: uv run test
+        language: system
+        files: \.py$
+        pass_filenames: false

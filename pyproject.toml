@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "UtilityScripts"
+version = "0.1.0"
+description = "Personal utility scripts, setup scripts, and Claude Code plugins."
+readme = "README.md"
+requires-python = ">=3.12"
+
+[project.scripts]
+lint-md = "entrypoints:lint_md"
+lint = "entrypoints:lint"
+format = "entrypoints:format"
+test = "entrypoints:test"
+
+[tool.setuptools]
+py-modules = ["entrypoints", "utils"]
+
+[tool.setuptools.package-dir]
+"" = ".claude/scripts"
+
+[dependency-groups]
+dev = [
+    "playwright>=1.63.0",
+    "pre-commit>=4.6.2",
+    "pytest>=9.0.3",
+    "ruff>=0.16.8",
+    "rumdl>=0.2.79",
+]
+
+[tool.pytest.ini_options]
+testpaths = [".claude/scripts"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM", "N", "C4", "RUF"]
+# Intentional typography in help text, docstrings, and HTML-entity maps.
+allowed-confusables = ["–", "—", "’", "‘", "×", "\u00a0"]

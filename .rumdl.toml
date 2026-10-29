@@ -1,0 +1,35 @@
+# Run via `uv run lint-md`; `uv run lint-md --fix` autofixes what rumdl can.
+
+[global]
+disable = ["MD013", "MD041"]
+exclude = [".git", ".pytest_cache", ".ruff_cache", ".rumdl_cache", ".venv", "venv", "tmp", "temp", "sessions", "marxist-db"]
+respect-gitignore = true
+
+[MD004]
+style = "dash"
+
+[MD007]
+indent = 2
+
+[MD009]
+br-spaces = 0
+strict = true
+
+[MD012]
+maximum = 1
+
+[MD024]
+allow-different-nesting = true
+
+[MD026]
+punctuation = ".,;!。，；！"
+
+[MD033]
+allowed-elements = ["title", "author"]
+
+[MD048]
+style = "backtick"
+
+[MD060]
+enabled = true
+style = "aligned"
