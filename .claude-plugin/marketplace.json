@@ -22,8 +22,8 @@
     {
       "name": "dev-utils",
       "source": "./plugins/dev-utils",
-      "description": "Changeset review, fix application, and instruction-file optimization skills for Claude Code.",
-      "version": "0.1.0"
+      "description": "Changeset review, fix application, instruction-file optimization, and CSV/TSV inspection and transform skills for Claude Code.",
+      "version": "0.2.0"
     }
   ]
 }
