@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "dev-utils",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Changeset review, fix application, instruction-file optimization, and CSV/TSV inspection and transform skills for Claude Code.",
   "author": {
     "name": "Lena M.",

@@ -374,8 +374,8 @@ End the message with this handoff line:
 > Caller: present this plan to the user, wait for explicit approval, then invoke the
 > `dev-utils:apply-fixes` skill with this plan as `args` to apply the fixes.
 
-Do not apply any fix here. `dev-utils:apply-fixes` owns applying approved fixes, is not forked, and
-is not user-invocable — the caller runs it inline after approval.
+Do not apply any fix here. `dev-utils:apply-fixes` owns applying approved fixes, runs forked, and
+is not user-invocable — the caller invokes it after approval.
 
 No Errors or Warnings → state that and stop — no plan, no handoff.
 
