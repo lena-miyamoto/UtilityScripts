@@ -4,21 +4,24 @@ description: >
              Review the current changeset for logical inconsistencies, obvious flaws, stale
              cross-file references in instruction files, repo-contract violations in changed
              Python and shell, plugin version drift, and confidential data. Auto-detects
-             scope: staged changes if present, otherwise unstaged. Produces a structured findings
-             report with a verdict, a change summary, and a proposed commit subject; returns a fix
-             plan to the caller and hands off to `dev-utils:apply-fixes` when issues warrant it.
-model: opus
+             scope: staged changes if present, otherwise unstaged, splits the changeset into up
+             to three independent review areas, and fans out one parallel sub-agent per area
+             before merging the reports. Produces a structured findings report with a verdict, a
+             change summary, and a proposed commit subject; returns a fix plan to the caller and
+             hands off to `dev-utils:apply-fixes` when issues warrant it.
+model: sonnet
 effort: high
 context: fork
+background: false
 ---
 
 # Review Changeset
 
-Diff-driven review of the current changeset. Instruction files: inconsistencies, stale references,
-contradictions that cause wrong behavior. Changed Python and shell: correctness, repo-contract,
-modern-idiom violations, using the repo's own checks as evidence. Produces a severity-labeled
-findings report. Fix-worthy findings → fix plan returned to caller as text; caller invokes
-`dev-utils:apply-fixes`.
+Diff-driven review of current changeset. Auto-detect scope, partition changed files into cohesive
+review areas, fan out one sub-agent per area, merge reports into one. Instruction files:
+inconsistencies, stale references, contradictions causing wrong behavior. Python and shell:
+correctness, repo-contract, modern-idiom violations, using repo's own checks as evidence.
+Fix-worthy findings → fix plan returned to caller as text; caller invokes `dev-utils:apply-fixes`.
 
 ## When to Use
 
@@ -41,7 +44,7 @@ git status --short
 git log --oneline -8
 ```
 
-Auto-detect the changeset — no argument needed:
+Auto-detect changeset — no argument:
 
 ```bash
 git diff --cached -M --stat
@@ -56,9 +59,11 @@ git diff -M
 git ls-files --others --exclude-standard
 ```
 
-Untracked files count as part of the unstaged scope; read each. Only one scope — never merge staged
-and unstaged. State which scope was used. Review what the user is about to commit (staged) or still
-working on (unstaged).
+Untracked files count as unstaged scope; read each. One scope only — never merge staged and
+unstaged. State which scope was used: what the user is about to commit (staged) or still working on
+(unstaged).
+
+This snapshot is the whole split input. Never re-detect scope later.
 
 ### 2. Filter to Reviewable Files
 
@@ -76,11 +81,92 @@ Exclude `.venv/`, `__pycache__/`, `*.egg-info/`, `.pytest_cache/`, `.ruff_cache/
 and every path excluded by `.gitignore` — especially `finance-tools/*.csv`, `tmp/`, `*-db/`, and
 `restored/`. Never read an ignored path.
 
-Nothing remains → report "No reviewable files in changeset" and stop. Steps 3–10 cover instruction
-files; steps 11 and 12 cover Python and shell, step 6 plugin manifests. A changeset with several
+Nothing remains → report "No reviewable files in changeset" and stop. Steps 6–13 cover instruction
+files; steps 14 and 15 cover Python and shell, step 9 also plugin manifests. A changeset with several
 file classes runs each matching step.
 
-### 3. Read Each Changed File
+### 3. Partition Into Review Areas
+
+Split reviewable files into **areas** — bundles one agent can hold in context, coupled enough to
+review alone. Do this before any review runs.
+
+- One file belongs to exactly one area. No file dropped, none reviewed twice.
+- **Coupling beats balance.** Keep together: a plugin's manifests, `README.md`, skills and reference
+  files; a skill and the reference files it loads; root `CLAUDE.md` and the
+  `agent-templates/claude-global/CLAUDE.md` rules it owns; any changed pair where one file references
+  the other. Splitting a coupled pair across agents loses this skill's highest-value comparison.
+- Split along natural seams: changed file class, plugin boundary, setup script versus plugin.
+- **Cap at 3 areas.** More candidates → merge the most related or the smallest into a neighbouring
+  area. Never dispatch more than 3 agents.
+- **One area → no fan-out.** Run steps 6–15 inline over the whole changeset, continue at step 16.
+  Single-area changesets gain nothing from an agent and pay context twice.
+- State the split in the final report.
+
+### 4. Fan Out Area Reviews
+
+Dispatch one agent per area (2–3 areas). Send **all** `Agent` calls in one message so they run
+concurrently; wait for every one to return.
+
+- `subagent_type: general-purpose`.
+- `model: sonnet`, `effort: high` — this file's frontmatter settings, unchanged for every area.
+  Never raise or lower them per area, never omit them: an agent left on defaults does not match this
+  skill's settings. The downgrade from the Selection Guide's `opus` row is deliberate: up to 3 agents
+  run at once per review, and `effort: high` carries the reasoning load.
+- One call per area, never more than 3.
+
+Briefs are self-contained — a fresh agent sees only the brief. Include exactly this, filled in:
+
+```text
+Review area: <short name>
+Scope: <staged|unstaged>. The files below are the complete scope — do not review anything else.
+Diff: staged → `git diff --cached -M -- <path>`; unstaged → `git diff -M -- <path>`, and untracked
+      files have no diff, so read them in full.
+Files: <one line per file: status + path>
+Related files outside this area: <paths, or "none">
+
+Read ${CLAUDE_PLUGIN_ROOT}/skills/review-changeset/SKILL.md and apply steps 6–15 to your files only.
+Do not partition, do not spawn sub-agents, do not write, edit, or fix anything — read-only.
+
+Report every finding you can establish, in one pass. Do not stop after the first Error, and do not
+rank findings by how easy they are to fix: a flaw found after an earlier one is not less important.
+
+Return exactly:
+Area: <name>
+Files reviewed: <paths>
+Findings: one block per finding —
+  Severity: Error | Warning | Info
+  Location: file:line
+  Description: what is wrong and why it matters
+  Related files: <paths or "none">
+  Evidence: tool output, or the reference file section the finding rests on
+Changes: one bullet per change in this area, for the changeset summary
+```
+
+Dispatch rules:
+
+- Wait for every dispatched agent before continuing. Partial results never get assembled: a missing
+  report is a blind spot the fan-out exists to remove.
+- Agent fails, returns nothing usable, or skips files → re-dispatch that area once. Still nothing →
+  review that area inline with steps 6–15 yourself and say so in the final report. Never fabricate
+  findings, never fill a gap from another area's report.
+- A finding in one area does not cancel a review of another. All areas are reviewed, always.
+
+### 5. Merge Area Reports
+
+Before assembling the report:
+
+- Concatenate findings. Dedupe identical ones (same file, line, issue); different severities keep
+  the higher.
+- Agents contradicting each other about the same line → re-read the file, decide yourself.
+- **Boundary pairs.** For every changed file, list related files from step 9 that changed in a
+  *different* area; run step 9's pair checks on those pairs yourself. The split hides exactly these
+  comparisons.
+- **Coverage audit.** Confirm each area report covers its steps 6 and 7 duties for every file it
+  owns. A report that skipped the confidential-data scan leaves those files unscanned → run step 7
+  yourself over them. Any file named in no report → review it inline.
+- Nothing is re-reviewed during the merge. Findings from all areas feed step 16 as-is.
+
+### 6. Read Each Changed File
 
 Read every file from step 2 in full — current on-disk version. For code files, read the diff hunk
 too. For each **instruction** file, extract:
@@ -94,7 +180,7 @@ too. For each **instruction** file, extract:
   `argument-hint`, `disable-model-invocation`, `model`, `effort`, `context`, `background` (for
   skills); `name`, `description`, `tools`, `model` (for agents).
 
-### 4. Confidential Data Check
+### 7. Confidential Data Check
 
 The repo is public. Scan the full diff — not just instruction files — for:
 
@@ -106,9 +192,9 @@ The repo is public. Scan the full diff — not just instruction files — for:
 Any match → **Error**, and the overall verdict is `BLOCKED`. Never quote the value or name it —
 report `file:line` and type only. Never reproduce it in the fix plan.
 
-### 5. Stale-Reference Check
+### 8. Stale-Reference Check
 
-For every reference from step 3, resolve against repo root; verify the target exists on disk with
+For every reference from step 6, resolve against repo root; verify the target exists on disk with
 `test -f <path>`. Flag every missing path as:
 
 - **Error** — target referenced in a procedure step or mandatory file load. Missing it breaks
@@ -119,7 +205,7 @@ Also flag references that no longer match repo structure — e.g., a skill point
 `.claude/reference/foo.md` when the file now lives in the plugin's `references/`, or a plugin README
 pointing at a moved module.
 
-Beyond paths, cross-check names against the current repo state:
+Beyond paths, cross-check names against repo state:
 
 - Files renamed, moved, or deleted (use `-M` rename detection) that are still referenced elsewhere —
   `Grep` the old name repo-wide.
@@ -128,10 +214,10 @@ Beyond paths, cross-check names against the current repo state:
 - URLs or anchors that moved or 404.
 - Plugin, agent, skill, or directory names that were renamed.
 
-Confirm before flagging: a reference is stale only when its target truly no longer exists — `Grep`
-or `Read` to verify. Skip references this same changeset already fixes; flag only the stragglers.
+Confirm before flagging: stale only when the target truly no longer exists — `Grep` or `Read` to
+verify. Skip references this changeset already fixes; flag stragglers.
 
-### 6. Cross-File Consistency Check
+### 9. Cross-File Consistency Check
 
 For each changed file, identify its **related files** — other instruction files it references, plus
 files that reference it. Known related sets in this repo:
@@ -157,7 +243,7 @@ version field it carries matches: `.claude-plugin/plugin.json` → `version`, th
 bundles a Python project. A mismatch is an **Error**; a touched plugin with no version bump at all is
 an **Error**.
 
-### 7. Model & Effort Appropriateness
+### 10. Model & Effort Appropriateness
 
 For every changed skill or agent file with `model` and/or `effort`, read
 `${CLAUDE_PLUGIN_ROOT}/references/model-capabilities.md` and resolve the value there before judging.
@@ -179,7 +265,7 @@ Anthropic the aliases map to the Claude models of those names. Flag:
 Cite `${CLAUDE_PLUGIN_ROOT}/references/model-capabilities.md` in every finding from this step. This
 step never edits frontmatter — corrections go into the fix plan like any other finding.
 
-### 8. Internal Consistency
+### 11. Internal Consistency
 
 Within each changed file, flag:
 
@@ -193,7 +279,7 @@ Within each changed file, flag:
   removed, verify the rule is still enforced elsewhere or flag it.
 - **Missing steps** — numbered procedure steps where a number is skipped (1, 2, 4 — missing 3).
 
-### 9. Instruction Guidance Check
+### 12. Instruction Guidance Check
 
 For every changed instruction or config file, compare its claims against current Anthropic guidance:
 CLAUDE.md conventions, skill frontmatter and layout, plugin schema, hooks, settings keys, model
@@ -204,14 +290,14 @@ When unsure what is current, ask the `claude-code-guide` agent or WebFetch the o
 finding in every such finding. A repo claim no cited source supports is a **Warning** — the repo's
 reference files drive audits and must not carry unsourced rules.
 
-### 10. Token Efficiency
+### 13. Token Efficiency
 
 Flag verbosity, duplicated restatements, and padding that cost context on every load — never at the
 cost of meaning. Meaning includes emphasis keywords, obligation words, temporal framing, enumerated
 counts, identity claims, and consequence statements. A rule that survives only as a pointer is
 cheaper than a copied paragraph; a copied paragraph is only acceptable when no owner file exists.
 
-### 11. Python Review
+### 14. Python Review
 
 Skip this step when no `.py` files remain after step 2.
 
@@ -232,10 +318,10 @@ false positives. For every changed `.py` file:
    type annotations in root scripts, and heavy boundary mocking in plugin tests are repo norms, not
    findings.
 
-Cite `${CLAUDE_PLUGIN_ROOT}/references/python-review.md` in every finding from this step. Like step 7,
-this step never edits code — corrections go into the fix plan.
+Cite `${CLAUDE_PLUGIN_ROOT}/references/python-review.md` in every finding from this step. Like step
+10, this step never edits code — corrections go into the fix plan.
 
-### 12. Shell Review
+### 15. Shell Review
 
 Skip this step when no shell files remain after step 2.
 
@@ -254,9 +340,10 @@ Skip this step when no shell files remain after step 2.
 - Preserve CLI shape: flags, env vars, prompts, exit behavior, and default side effects are part of
   the interface. A silently changed flag or default is an **Error**.
 
-### 13. Assemble Findings Report
+### 16. Assemble Findings Report
 
-Produce a report organized by file. For each finding, include:
+Produce a report organized by file from the merged area reports plus your own boundary and coverage
+checks. For each finding, include:
 
 - **Severity**: `Error` (will cause wrong or undefined behavior), `Warning` (potential issue, needs
   judgment), `Info` (noted, no action required).
@@ -267,7 +354,7 @@ Produce a report organized by file. For each finding, include:
 No findings → report "No issues found in `N` reviewable files." Include a summary line listing which
 files were reviewed. Stop here — no handoff needed.
 
-### 14. Hand Off the Fix Plan (When Findings Warrant It)
+### 17. Hand Off the Fix Plan (When Findings Warrant It)
 
 If the report contains any **Error** or **Warning** findings, append the fix plan to your final
 message as text — do **not** write a file. The plan must:
@@ -294,17 +381,20 @@ No Errors or Warnings → state that and stop — no plan, no handoff.
 
 ## Writing Rules
 
-- Read-only always. Writes no files — including no plan file. Review summary and fix plan return as
-  text to the caller.
-- Never edit, move, or delete a reviewed file. Beyond step 1 git scope checks, the diff reads steps 3
-  and 8 require, and step 5 `test -f` checks, this skill runs only these read-only checks:
+- Read-only. Writes no files, no plan file. Review summary and fix plan return as text to the
+  caller.
+- Never edit, move, or delete a reviewed file. Beyond step 1 git scope checks, the diff reads steps 6
+  and 11 require, and step 8 `test -f` checks, this skill runs only these read-only checks:
   `bash -n`, `shellcheck`, `uv run --project <dir> pytest`, and a project's configured linter. Never
   `--fix`, never a formatter, never any fix-up script — text-only is what lets this skill run
   backgrounded.
-- Never apply fixes. This skill stops at the handoff — `dev-utils:apply-fixes` owns applying approved
-  fixes.
+- Never apply fixes. Skill stops at the handoff — `dev-utils:apply-fixes` owns approved fixes.
 - Never reproduce a confidential value. Report `file:line` and type only.
-- Python findings go through step 11 and `${CLAUDE_PLUGIN_ROOT}/references/python-review.md`.
+- Never dispatch more than 3 area agents, never dispatch them one at a time, and never narrow a brief
+  to a "quick pass". An area agent that skips checks creates the blind spot the fan-out is for.
+- Coordinator owns the final report. Never pass an area report through unmerged; never drop a finding
+  because another area covers similar ground.
+- Python findings go through step 14 and `${CLAUDE_PLUGIN_ROOT}/references/python-review.md`.
   Suppress every pattern on that file's valid-patterns list before reporting — a false positive on
   repo idiom costs more than a missed nit.
 - Treat `.gitignore` boundaries as out of scope. Skip any file excluded by `.gitignore`; the
@@ -320,42 +410,52 @@ No Errors or Warnings → state that and stop — no plan, no handoff.
 
 ## Validation
 
-1. Diff scope auto-detected correctly — staged if present, otherwise unstaged; stated in the report.
-2. Every changed reviewable file read in full; for code files, the diff hunk as well.
-3. Every extracted file reference verified against disk.
-4. Cross-file checks completed for all related-file pairs where at least one side changed.
-5. Every touched plugin has matching versions in `plugin.json` and `marketplace.json`, and
+1. Diff scope auto-detected correctly — staged if present, otherwise unstaged; stated in the report;
+   staged and unstaged never mixed.
+2. Every reviewable file assigned to exactly one area, none dropped, area count ≤ 3, split stated in
+   the report.
+3. All area agents dispatched in one message with `model: sonnet` and `effort: high`; every
+   dispatched agent returned before assembly; any failed agent is named and its area was reviewed
+   inline.
+4. Every changed reviewable file read in full by its area agent or by you when reviewing inline; for
+   code files, the diff hunk as well.
+5. Area reports merged: duplicates reconciled, contradictions re-checked, cross-area boundary pairs
+   compared, and every area's steps 6 and 7 coverage confirmed.
+6. Every extracted file reference verified against disk.
+7. Cross-file checks completed for all related-file pairs where at least one side changed.
+8. Every touched plugin has matching versions in `plugin.json` and `marketplace.json`, and
    `pyproject.toml` too when it bundles a Python project.
-6. Internal consistency checked for every changed file.
-7. Report includes severity, location, and description for every finding. "No issues found" is an
-   acceptable result when the changeset is clean.
-8. Every changed file carrying `model` or `effort` was checked against
-   `${CLAUDE_PLUGIN_ROOT}/references/model-capabilities.md`, and each such finding names the model
-   the alias resolves to under the session's wiring.
-9. If Errors, Warnings, or a confidential-data match were found: a fix plan was returned as text
-   with concrete fixes, and the final message instructs the caller to invoke `dev-utils:apply-fixes`
-   after user approval. No plan file was written, and no confidential value was reproduced.
-10. If `.py` files were in scope: `${CLAUDE_PLUGIN_ROOT}/references/python-review.md` was read, the
+9. Internal consistency checked for every changed file.
+10. Report includes severity, location, and description for every finding. "No issues found" is an
+    acceptable result when the changeset is clean.
+11. Every changed file carrying `model` or `effort` was checked against
+    `${CLAUDE_PLUGIN_ROOT}/references/model-capabilities.md`, and each such finding names the model
+    the alias resolves to under the session's wiring.
+12. If Errors, Warnings, or a confidential-data match were found: a fix plan was returned as text
+    with concrete fixes, and the final message instructs the caller to invoke `dev-utils:apply-fixes`
+    after user approval. No plan file was written, and no confidential value was reproduced.
+13. If `.py` files were in scope: `${CLAUDE_PLUGIN_ROOT}/references/python-review.md` was read, the
     owning project's tests were run where they exist, and each Python finding quotes tool output or
     cites a rulebook section.
-11. If shell files were in scope: `bash -n` ran on each, `shellcheck` ran where installed, and each
+14. If shell files were in scope: `bash -n` ran on each, `shellcheck` ran where installed, and each
     shell finding quotes tool output or names the exact destructive step or broken guarantee.
-12. Every Python finding was checked against the rulebook's valid-patterns list, and no command that
+15. Every Python finding was checked against the rulebook's valid-patterns list, and no command that
     rewrites a source file was run.
-13. Every test-quality fix names the branch whose removal breaks the test and the masker the fixture
+16. Every test-quality fix names the branch whose removal breaks the test and the masker the fixture
     defeats — no fixture was handed off that would still pass under its own mutation.
-14. Every changed instruction file was compared against current Anthropic guidance, and each
+17. Every changed instruction file was compared against current Anthropic guidance, and each
     guidance finding cites a doc URL or a `claude-code-guide` result.
-15. The token-efficiency pass ran over every changed instruction file, with no meaning dropped.
+18. The token-efficiency pass ran over every changed instruction file, with no meaning dropped.
 
 ## Output (fixed order)
 
 1. **Verdict** — one line: `PASS` / `CHANGES NEEDED` / `BLOCKED`.
 2. **Findings** — grouped by file, severity labels (Error / Warning / Info), each with `file:line`
    and the tool rule ID or output where a tool produced it. No findings → say so.
-3. **Changes** — brief bullets, one per change in the changeset.
-4. **Proposed commit message** — Conventional Commits subject, ≤80 chars, no body, no trailer.
-5. **Fix plan** — only when Errors or Warnings exist: the plan from step 14, plus the handoff line.
+3. **Changes** — brief bullets, one per change in the changeset, merged from the area reports.
+4. **Proposed commit message** — Conventional Commits subject, ≤50 chars, no body, no trailer.
+5. **Fix plan** — only when Errors or Warnings exist: the plan from step 17, plus the handoff line.
 6. **Clean result** — no findings: confirmation the changeset is clean; no fix plan, no handoff.
 
-Summary line: number of files reviewed by class, number of findings by severity.
+Summary line: number of files reviewed by class, number of findings by severity, and the review
+areas used with the agent that covered each.
