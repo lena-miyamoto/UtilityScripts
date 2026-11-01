@@ -7,25 +7,33 @@ description: Python review rulebook — evidence order, repo contract, correctne
 Source of truth for Python review in `review-changeset` — rulebook for `*.py` anywhere in the repo,
 including plugin subprojects.
 
-Repo shape: standalone scripts at the repo root and in topic dirs (`finance-tools/`, `wordanalyzer/`,
-`wiki-parsers/`) are untyped, print to stdout, and have no tests. Plugin subprojects are uv-managed
-Python ≥3.13 with pytest and their own `pyproject.toml`. Do not apply plugin-project standards to
-root scripts, or the reverse.
+Repo shape: detect it per file, not per repo. A uv project is a `pyproject.toml` that actually covers
+the file — for example, its `[tool.setuptools.package-dir]` or `py-modules` places the file, its
+`[tool.pytest.ini_options] testpaths` includes it, or a `tests/` directory sits beside it. Bare
+`pyproject.toml` presence does not make a file part of that project. In this repo the root
+`pyproject.toml` covers only `.claude/scripts`, so scripts outside it are standalone unless their
+own project's `pyproject.toml` covers them — the plugin subprojects do. Run a project's tests when
+it has `tests/` or pytest configuration, and its configured linter read-only when it sets
+`[tool.ruff]` or another `[tool.*]` lint section. The repo-wide root `[tool.ruff]` still applies to
+standalone scripts: `uv run ruff check <file>` is available read-only. A standalone script is
+untyped, prints to stdout, and has no tests — review it by reading. Do not apply project standards to
+standalone scripts, or the reverse.
 
 ## Evidence Order
 
 Always in this order; earlier evidence outranks later judgment.
 
 1. Read the diff hunk **and** the full current file. Hunk alone hides the contract the change sits in.
-2. If the file lives in a uv project (nearest `pyproject.toml` at or above it), run
+2. If the file lives in a uv project (a `pyproject.toml` that covers it, per Repo shape above), run
    `uv run --project <project-dir> pytest` when that project has tests. A failing test is an
    **Error**, quoted verbatim. Execute this from the project directory or pass `--project`; never
    from the repo root when the root is not a Python project.
-3. If the project configures a linter (ruff, `[tool.*]` lint settings), run it read-only. This repo
-   has no repo-wide Python linter — root scripts have none. Never invent a lint result, and never
-   report a rule ID no configured tool produced.
-4. Only then apply the judgment rules below — they cover what the tools cannot see. Root scripts are
-   reviewed by reading, period.
+3. If the project configures a linter (ruff, `[tool.*]` lint settings), run it read-only. A
+   standalone script has no project tests, but the repo-wide `[tool.ruff]` still applies:
+   `uv run ruff check <file>` read-only. Never invent a lint result, and never report a rule ID no
+   configured tool produced.
+4. Only then apply the judgment rules below — they cover what the tools cannot see. Standalone
+   scripts are reviewed by reading; the repo-wide ruff check is their only automated evidence.
 
 Never pass `--fix`; never run a formatter or any command that rewrites a source file. This skill
 stays text-only.
@@ -82,8 +90,8 @@ Violation is an **Error** unless stated otherwise.
 
 ## Modern Python Rules
 
-- Plugin code targets Python ≥3.13; root scripts vary and must keep running on the interpreter they
-  are invoked with. Judge idioms against the floor of the file's own project.
+- Judge idioms against the floor of the file's own project: read `requires-python` from the nearest
+  `pyproject.toml`. Standalone scripts must keep running on the interpreter they are invoked with.
 - `X | None` over `Optional[X]`; builtin generics (`list[str]`, `dict[str, int]`) over
   `typing.List`/`Dict`; `collections.abc` (`Iterable`, `Callable`, `Sequence`) over the `typing`
   equivalents.
@@ -97,16 +105,16 @@ Violation is an **Error** unless stated otherwise.
   is a Warning.
 - Introducing `asyncio` or `async def` into a sync script or CLI path is a Warning — flag it, do not
   assume it is an upgrade.
-- `from __future__ import annotations` unnecessary on 3.13 and absent repo-wide. Adding it is
-  **Info**.
+- `from __future__ import annotations` unnecessary on the project's Python floor and absent
+  repo-wide. Adding it is **Info**.
 
 ## Test Rules (pytest)
 
-Tests exist only in plugin subprojects. Root scripts have none; treat a root script change with no
-test as an Info coverage note, not a finding.
+A file in a project with tests (`tests/` or pytest configuration) follows these rules. A standalone
+script with no test is an Info coverage note, not a finding.
 
-- Tests live next to the module they cover, named `test_<module>.py` or `test-<module>.py`
-  (statusline configures both patterns).
+- Tests live next to the module they cover or in `tests/`, named `test_<module>.py` or
+  `test-<module>.py`.
 - One behavior per test; the name states the behavior. `test_1`, `test_works`, and names carrying no
   expectation are a Warning.
 - `@pytest.mark.parametrize` over copy-pasted near-identical tests; pass `ids=` for readable names.
@@ -155,16 +163,16 @@ Every entry below is an accepted repo pattern; flagging it is a false positive.
   is configured. Report an annotation finding only inside a module that already annotates, and only
   where the annotation is wrong or inconsistent with the ones around it.
 - **`print()` to stdout or stderr.** That is the CLI contract, not a debugging leftover. `logging`
-  is not this repo's idiom for CLI output.
+  is not the CLI idiom for output.
 - **Module-level compiled regexes and constant collections** with explanatory comments.
-- **Heavy `monkeypatch`/`unittest.mock` use in plugin tests.** Boundary mocking is the repo's
+- **Heavy `monkeypatch`/`unittest.mock` use in tests.** Boundary mocking is the accepted test
   strategy. Judge *what* is patched, not how much.
 - **Leading-underscore helpers and module-private names.**
 - **Documented guards and fallbacks** — a safety net with a comment is not dead code.
 - **`# noqa: <rule>`** carrying a reason.
 - **`if TYPE_CHECKING:` imports**, `__all__`, and `__main__` guards.
-- **Shebang scripts invoked directly** at the repo root (`./webp2gif`). The `uv run` contract applies
-  inside uv projects, not to standalone repo scripts.
+- **Shebang scripts invoked directly** at the repository root. The `uv run` contract applies inside
+  uv projects, not to standalone scripts.
 - **`os` calls with no `pathlib` equivalent**, including `os.path.lexists`.
 - **Anything a configured linter already checks and the diff passes.**
 

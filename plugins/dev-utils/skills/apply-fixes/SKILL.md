@@ -19,6 +19,13 @@ Source of truth for the `apply-fixes` skill. Applies fixes from an approved `dev
 plan. Forked and not user-invocable — only the handoff-receiving caller invokes it, after the
 user approves the plan.
 
+**Repo-scope only.** Never edit, move, or delete anything under `$CLAUDE_CONFIG_DIR` (unset →
+`~/.claude`): global `CLAUDE.md`, `settings.json`, agents, skills, installed plugins, project state.
+Resolve symlinks first — a repo path whose target lands in the config dir is still out of scope. A
+plan item targeting that subtree is skipped and reported to the caller, never applied. Reading this
+plugin's own `${CLAUDE_PLUGIN_ROOT}` references is allowed when installed there; nothing else in
+the subtree is.
+
 ## When to Use
 
 - Called by the caller immediately after `dev-utils:review-changeset` returns a fix plan (Errors or Warnings).
@@ -50,9 +57,8 @@ user approves the plan.
    so they run concurrently, and wait for every one to return.
    - `subagent_type: general-purpose`.
    - `model` and `effort` at this file's frontmatter values, unchanged for every area. Never raise or
-     lower them per area, never omit them. The step up from the Selection Guide's `haiku` row is
-     deliberate: it matches `review-changeset`'s coordinator settings, and `effort: high` carries the
-     reasoning load.
+     lower them per area, never omit them. They match `review-changeset`'s coordinator settings, and
+     `effort: high` carries the reasoning load.
    - One call per area, never more than 3. Areas are disjoint — no file appears in two briefs.
    - Agent failed or returned an area incomplete → apply that area's items inline yourself and name
      the failure in the report.
@@ -63,13 +69,18 @@ user approves the plan.
    Fix area: <short name>
    Files: <one line per file, with the plan items that touch it>
    Plan items: <verbatim checklist entries for this area only>
-   Rules: <the writing rules below that apply to these files>
+   Rules: <the writing rules below that apply to these files>. Repo scope: resolve symlinks first;
+     never read or edit a path under `$CLAUDE_CONFIG_DIR` (unset → `~/.claude`) or a path whose
+     target lands there; the only exception is this plugin's own `${CLAUDE_PLUGIN_ROOT}` references.
    Validation: <the step 7 commands for these file classes>
    Report back: each item applied or skipped, with the validation command run per file.
    ```
 
 5. Apply each plan item, smallest local change first — in this fork, or through the area agent that
    carries it:
+   - Path check: resolve `$CLAUDE_CONFIG_DIR` (unset → `~/.claude`); skip any item whose target
+     resolves into it and report the skip. Never read or edit that subtree, except this plugin's own
+     `${CLAUDE_PLUGIN_ROOT}` references.
    - Re-read the target file with `Read` before each edit — sequential edits need current content,
      not an earlier turn's version.
    - Make only the change the plan specifies; do not widen scope or invent extra fixes.
@@ -86,12 +97,14 @@ user approves the plan.
    exactly that version. When the plan edits a plugin but names no version, stop and ask the caller;
    never bump on a guess. Skipping a field the plugin carries is not a finished fix.
 7. Validate by file class:
-   - `*.md` → run `git diff --check`; verify YAML frontmatter and relative links by reading. The
-     repo has no Markdown linter — never claim one ran.
+   - `*.md` → run `git diff --check`; run `uv run rumdl check <changed .md>` read-only (never
+     `--fix`); verify YAML frontmatter and relative links by reading. Never claim a linter ran when
+     it did not.
    - `*.sh` and shebang scripts → run `bash -n <path>`; run `shellcheck <path>` when
      `command -v shellcheck` succeeds.
    - `*.py` in a uv project → run `uv run --project <project-dir> pytest`; run the project's
-     configured linter read-only. Root scripts have no tests or linter — re-read the edited region.
+     configured linter read-only. Root scripts have no project tests but the repo-wide
+     `[tool.ruff]` applies: `uv run ruff check <file>` read-only; re-read the edited region.
    - Plugin manifests → re-check every version field the plugin carries matches.
 8. Staging: edits to files the review scope already staged leave the index stale. When the scope was
    staged, report every file where index and worktree differ (`MM` in `git status --short`) and the
@@ -111,6 +124,8 @@ user approves the plan.
 - Keep checksum verification in download-and-run flows. Never weaken an integrity check to make a
   fix simpler.
 - Never write confidential data to a tracked file, and never paste a flagged value into a report.
+- Never edit, move, or delete a path under `$CLAUDE_CONFIG_DIR` (unset → `~/.claude`) — the user's
+  machine configuration is not repo content. Report any such plan item as out of scope.
 - Never use `rm`; delete with `gio trash` — see `CLAUDE.md` for the `/tmp` exception.
 - Never apply a fix that is not in the plan, and never apply without approval. The version bump in
   step 6 is no exception: when the plan omits it, ask the caller instead of applying it.
@@ -141,6 +156,9 @@ user approves the plan.
 8. Stale index reported when the review scope was staged; nothing staged or committed for the user.
 9. The caller receives a fix-by-fix report, including any deviation from the plan (e.g. a fixture
    tightened to make a mutation fail) and why.
+10. No file under `$CLAUDE_CONFIG_DIR` (unset → `~/.claude`) was read or edited, except this
+    plugin's own `${CLAUDE_PLUGIN_ROOT}` references; any plan item targeting the config dir was
+    skipped and reported.
 
 ## Output
 

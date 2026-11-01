@@ -10,8 +10,9 @@ edited by this plugin.
 The harness reads `model` / `effort` at runtime; an alias resolves against the **service the
 session is pointed at**, not the alias name. An Anthropic-pointed session resolves `haiku` /
 `sonnet` to the Claude models of those names; a DeepSeek Anthropic-compatible endpoint resolves
-them to DeepSeek models. Never assume an alias means the Claude model of its name — check the
-session's wiring.
+them to DeepSeek models. Never assume an alias means the Claude model of its name — resolve it
+against the service the session is pointed at. Never read the user's `$CLAUDE_CONFIG_DIR` (unset →
+`~/.claude`) at all — not to discover the wiring, not for any other reason.
 
 This file is written against the maintainer's default DeepSeek wiring, not bound to it: Anthropic
 models are fully supported. Rules that hold only under DeepSeek wiring are labeled, never
@@ -35,7 +36,9 @@ which `(model, effort)` pair fits which task.
    route to the reasoning tier there. Under Anthropic wiring every alias resolves separately. On
    either service use `haiku` for cheap/mechanical work and a reasoning tier for reasoning-heavy
    work; under the DeepSeek wiring that tier is reached through `opus` or `fable`.
-5. **`inherit` means the session model** and is documented for skill frontmatter only — it is not a `/model` alias. Skills that should follow the caller's model use `model: inherit`; do not assume agents accept it.
+5. **`inherit` means the session model** and is not a `/model` alias. Skills and agents that should
+   follow the caller's model use `model: inherit`; a repo may standardize on it for its agents, so
+   check the repo's own convention before flagging the field.
 
 ## Alias Resolution
 
@@ -48,9 +51,10 @@ which `(model, effort)` pair fits which task.
 | `inherit` | session model       | session model                          | —                                |
 | full ID   | pinned snapshot     | pinned snapshot                        | —                                |
 
-**Default session wiring** — machine-level, in `~/.claude/settings.json`. This is how the
-maintainer's sessions are configured, not a repo guarantee; a session pointed elsewhere resolves the
-aliases differently:
+**Default session wiring** — machine-level configuration outside this repo, recorded here for
+context. This is how the maintainer's sessions are configured, not a repo guarantee; a session
+pointed elsewhere resolves the aliases differently. Never read `$CLAUDE_CONFIG_DIR` (unset →
+`~/.claude`) at all — not to determine a session's wiring:
 
 - `ANTHROPIC_BASE_URL = https://api.deepseek.com/anthropic` — the DeepSeek endpoint.
 - `ANTHROPIC_DEFAULT_MODEL = sonnet` — new sessions start on `sonnet`.
@@ -164,8 +168,8 @@ reaches the intended tier under DeepSeek wiring.
 
 Under the DeepSeek wiring reach the reasoning tier through `opus` or `fable`; `sonnet` adds nothing
 over `haiku` there, and `fable` adds nothing over `opus`. Do not rely on `xhigh` or `medium` to
-differentiate from `high`; on Anthropic those levels are distinct. Skills that should follow whatever
-model the caller uses keep `model: inherit` (skill frontmatter only).
+differentiate from `high`; on Anthropic those levels are distinct. Skills and agents that should
+follow whatever model the caller uses keep `model: inherit`.
 
 ## Sources
 
@@ -175,3 +179,4 @@ model the caller uses keep `model: inherit` (skill frontmatter only).
 - DeepSeek-V4-Pro-0813 model card: <https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro-0813>
 - Anthropic — Models overview: <https://platform.claude.com/docs/en/models/overview>
 - Claude Code — Model configuration (aliases, effort levels, precedence): <https://code.claude.com/docs/en/model-config>
+- Claude Code — Subagents (`inherit` session model): <https://code.claude.com/docs/en/sub-agents>

@@ -1,6 +1,6 @@
 ---
 name: compress-instructions
-description: "Compresses instruction .md files to cut token cost, keeping meaning exact. Accepts a file, directory, glob, or list of these. Rewrites body text in place: short fragments, plain words, technical jargon kept verbatim. Uses only file reads, `Edit`/`Write`, and `find`/glob expansion — no scripts. Skips README.md, CONTRIBUTING.md, DEVELOPMENT.md, CHANGELOG.md, and references/*.md unless named directly. Use when explicitly asked to compress instruction files."
+description: "Compresses instruction .md files to cut token cost, keeping meaning exact. Accepts a file, directory, glob, or list of these. Rewrites body text in place: short fragments, plain words, technical jargon kept verbatim. Uses only file reads, `Edit`/`Write`, `find`/glob expansion, and `realpath`/`readlink -f` — no scripts. Skips README.md, CONTRIBUTING.md, DEVELOPMENT.md, CHANGELOG.md, and references/*.md unless named directly. Use when explicitly asked to compress instruction files."
 argument-hint: 'File, directory, glob, or list of instruction .md files'
 disable-model-invocation: true
 user-invocable: true
@@ -20,8 +20,9 @@ Meaning exact = every instruction, constraint, and outcome survives. Text with n
 
 Arg: file path, directory, glob, or space/comma-separated list.
 
-Refuse any path under `$CLAUDE_CONFIG_DIR` (default `~/.claude`) in every mode — file, directory,
-glob match, or list entry. Report the refusal; process nothing from it.
+Refuse any path under `$CLAUDE_CONFIG_DIR` (unset → `~/.claude`) in every mode — file, directory,
+glob match, or list entry. Never read or edit it; resolve symlinks first with `realpath`/`readlink -f`.
+Report the refusal; process nothing from it.
 
 - File → target directly.
 - Directory → `find <dir> \( -name .git -o -name .venv -o -name node_modules \) -prune -o -name '*.md' -print` via `Bash`.
@@ -42,10 +43,10 @@ glob expansion stay filtered.
 
 ## Process
 
-Per file, section-by-section — rewrite via `Edit`/`Write`; `Bash` only for `find`/glob expansion:
+Per file, section-by-section — rewrite via `Edit`/`Write`; `Bash` only for `find`/glob expansion and `realpath`/`readlink -f`:
 
 1. Resolve arg into target list (see Input handling).
-2. Scope check per file — under `$CLAUDE_CONFIG_DIR` → refuse, no override. Default-skip match → skip unless named directly as a file arg or list entry.
+2. Scope check per file — resolve symlinks first with `realpath`/`readlink -f`; under `$CLAUDE_CONFIG_DIR` (unset → `~/.claude`) → refuse, no override. Default-skip match → skip unless named directly as a file arg or list entry.
 3. **Read file** (skip if already in context this turn).
 4. **Density check.** Apply criteria below. If file meets all density thresholds, skip it, note which criteria triggered, continue. Never skip on subjective judgement alone.
 5. **Save original.** Step 3 content is reference. Hold in context as baseline for all comparisons.

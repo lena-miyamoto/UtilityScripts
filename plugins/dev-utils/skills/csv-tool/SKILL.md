@@ -54,7 +54,11 @@ index. `--fill-columns` accepts header names only.
 
 ## Procedure
 
-1. Map the request to a subcommand and options. Ambiguous column names or delimiters → ask, not guess.
+1. Refuse any input or output path under `$CLAUDE_CONFIG_DIR` (unset → `~/.claude`), even when
+   named directly: never read or overwrite config files or state there. The bundled
+   `${CLAUDE_PLUGIN_ROOT}` script is the tool, not an input, and stays usable if installed there.
+   Resolve symlinks first. Then map the request to a subcommand and options. Ambiguous column names
+   or delimiters → ask, not guess.
 2. Build the command; quote file paths. Transforms write to stdout by default, so preview there first.
 3. Run it and check the output. `check` exits non-zero when issues are found; treat that as a finding,
    not a failure.

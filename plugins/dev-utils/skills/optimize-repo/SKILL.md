@@ -65,11 +65,21 @@ Skills and docs must point to these owners, not restate their rules.
    - All `.gitignore`-excluded files and folders are out of scope for this skill.
    - Do not read, audit, edit, move, delete, or regenerate ignored paths — including
      `finance-tools/*.csv`, `tmp/`, `*-db/`, `restored/`, `__pycache__/`.
+   - Never touch `$CLAUDE_CONFIG_DIR` (unset → `~/.claude`). Global `CLAUDE.md`, `settings.json`,
+     agents, skills, and installed plugins are machine configuration, not repo content: do not read,
+     audit, edit, move, or delete them, never cite them as a standard, and resolve symlinks first.
+     Reading this plugin's own `${CLAUDE_PLUGIN_ROOT}` references is allowed when installed there;
+     nothing else in the subtree is. `agent-templates/claude-global/` is a repo file and stays in
+     scope.
+   - A repo-local `.claude/` directory is project configuration committed in this repo; it stays in
+     scope. Only the `$CLAUDE_CONFIG_DIR` subtree is excluded.
+   - Cleanup requiring a `$CLAUDE_CONFIG_DIR` path → skip that path; report it as intentionally
+     excluded.
    - Cleanup requiring an ignored path → stop; report it as intentionally excluded.
 3. Capture current state before editing:
    - Check `git status --short`.
    - Count relevant instruction lines with
-     `wc -l CLAUDE.md AGENTS.md README.md .claude/skills/*/SKILL.md plugins/*/skills/*/SKILL.md plugins/*/README.md`.
+     `wc -l CLAUDE.md AGENTS.md README.md plugins/*/skills/*/SKILL.md plugins/*/README.md`.
    - Flag any instruction file over ~500 lines for splitting (see 500-line rule in audit step 4).
    - Read changed files before patching; assume user/formatter edits intentional unless they break
      the task.
@@ -193,6 +203,8 @@ restatement).
   reference file over inline shortening.
 - Strict source-of-truth ownership.
 - Anything excluded by `.gitignore` is out of scope and must remain untouched.
+- Anything under `$CLAUDE_CONFIG_DIR` (unset → `~/.claude`) is out of scope and must remain
+  untouched — it is the user's machine configuration, not this repo.
 - Preserve keyword-rich frontmatter for discovery.
 - Prefer brevity and clarity over grammatical smoothness in every repo `*.md`.
 - Drop repetitive phrasing and padding when the meaning carries tighter.
@@ -210,9 +222,9 @@ restatement).
 
 1. **Confirm `${CLAUDE_PLUGIN_ROOT}/references/context-engineering-best-practices.md` was read**
    before any instruction file was evaluated. The audit is incomplete without it.
-2. Run frontmatter YAML and Markdown link review on every changed file. The repo has no Markdown
-   linter — verify YAML frontmatter validity and relative link integrity by reading. Never claim a
-   linter ran.
+2. Run Markdown lint and frontmatter/link review on every changed `*.md`:
+   `uv run rumdl check <changed .md>` read-only (never `--fix`), then verify YAML frontmatter
+   validity and relative link integrity by reading. Never claim a linter ran when it did not.
 3. Run `git diff --check`.
 4. Confirm no file or folder excluded by `.gitignore` was touched.
 5. Re-run the redundancy-pattern grep and account for every remaining match.
@@ -231,6 +243,8 @@ restatement).
    provided. If no justification was provided, the deviation is an unresolved finding.
 10. After completing edits, re-read each changed file and verify no regressions against the audit
     criteria above.
+11. No file under `$CLAUDE_CONFIG_DIR` (unset → `~/.claude`) was read, audited, or edited, and none
+    was cited as a standard.
 
 ## Output
 

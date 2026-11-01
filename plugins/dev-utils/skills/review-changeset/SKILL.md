@@ -23,6 +23,23 @@ inconsistencies, stale references, contradictions causing wrong behavior. Python
 correctness, repo-contract, modern-idiom violations, using repo's own checks as evidence.
 Fix-worthy findings → fix plan returned to caller as text; caller invokes `dev-utils:apply-fixes`.
 
+## Scope Boundary
+
+Repository files only. Resolve `$CLAUDE_CONFIG_DIR` (unset → `~/.claude`) and treat that whole subtree
+as out of scope: global `CLAUDE.md`, `settings.json`, `agents/`, `skills/`, `plugins/`, project state,
+everything under it.
+
+- Never read, diff, review, audit, or cite a file under it, even when named directly or present in
+  the changeset. The one exception: this plugin's own `${CLAUDE_PLUGIN_ROOT}` files, read only to
+  load this procedure and its references. Resolve symlinks first — a repo path that resolves into
+  the config dir is still out of scope. Skip such paths and list them as excluded.
+- Never use the user's global configuration as evidence. Model wiring, permissions, hooks, installed
+  plugins, and rules in a global `CLAUDE.md` say nothing about this repo's changeset. Resolving
+  aliases against the session's service (step 10) is not an exception: use the service the session
+  is pointed at, never a file in the config dir.
+- A repo-local `.claude/` directory is project configuration committed in this repo; it stays in
+  scope. Only the `$CLAUDE_CONFIG_DIR` subtree is excluded.
+
 ## When to Use
 
 - After editing `CLAUDE.md`, `AGENTS.md`, `README.md`, skill, or agent-template `.md` files, before
@@ -44,24 +61,39 @@ git status --short
 git log --oneline -8
 ```
 
-Auto-detect changeset — no argument:
+Auto-detect changeset — no argument. Resolve `$CLAUDE_CONFIG_DIR` (unset → `~/.claude`) first, then
+build the file list and drop every path that resolves into it or into an excluded class from step 2:
 
 ```bash
-git diff --cached -M --stat
-git diff --cached -M
+git diff --cached --name-only
 ```
 
-Non-empty → review **staged changes only**.
-Empty → fall back to **unstaged changes**:
+Unfiltered staged list non-empty → review **staged changes only**. Pass the filtered list explicitly:
 
 ```bash
-git diff -M
+git diff --cached -M --stat -- <list>
+git diff --cached -M -- <list>
+```
+
+Empty → fall back to **unstaged changes**, same filter:
+
+```bash
+git diff --name-only
 git ls-files --others --exclude-standard
 ```
 
-Untracked files count as unstaged scope; read each. One scope only — never merge staged and
-unstaged. State which scope was used: what the user is about to commit (staged) or still working on
-(unstaged).
+Then pass the filtered list:
+
+```bash
+git diff -M --stat -- <list>
+git diff -M -- <list>
+```
+
+Untracked files have no diff — read each after the filter. A path that resolves into the config dir
+or an excluded class is dropped, never read. One scope only — never merge staged and unstaged. State
+which scope was used: what the user is about to commit (staged) or still working on (unstaged). A
+filtered list that comes out empty → report "No reviewable files in changeset" and stop without
+running the diff.
 
 This snapshot is the whole split input. Never re-detect scope later.
 
@@ -78,8 +110,9 @@ From the file list, keep these classes:
   `plugins/**/pyproject.toml`, `.claude-plugin/marketplace.json`.
 
 Exclude `.venv/`, `__pycache__/`, `*.egg-info/`, `.pytest_cache/`, `.ruff_cache/`, `node_modules/`,
-and every path excluded by `.gitignore` — especially `finance-tools/*.csv`, `tmp/`, `*-db/`, and
-`restored/`. Never read an ignored path.
+every path under `$CLAUDE_CONFIG_DIR` (unset → `~/.claude`), and every path excluded by `.gitignore`
+— especially `finance-tools/*.csv`, `tmp/`, `*-db/`, and `restored/`. Never read an ignored path and
+never review an excluded one.
 
 Nothing remains → report "No reviewable files in changeset" and stop. Steps 6–13 cover instruction
 files; steps 14 and 15 cover Python and shell, step 9 also plugin manifests. A changeset with several
@@ -165,7 +198,8 @@ Before assembling the report:
   comparisons.
 - **Coverage audit.** Confirm each area report covers its steps 6 and 7 duties for every file it
   owns. A report that skipped the confidential-data scan leaves those files unscanned → run step 7
-  yourself over them. Any file named in no report → review it inline.
+  yourself over them. Any file named in no report and not excluded by step 2 → review it inline; an
+  excluded path stays skipped, never pulled into a review.
 - Nothing is re-reviewed during the merge. Findings from all areas feed step 16 as-is.
 
 ### 6. Read Each Changed File
@@ -249,15 +283,16 @@ an **Error**.
 
 For every changed skill or agent file with `model` and/or `effort`, read
 `${CLAUDE_PLUGIN_ROOT}/references/model-capabilities.md` and resolve the value there before judging.
-Resolve aliases against the session's service — never the Claude model of the same alias name.
+Resolve aliases against the session's service — never the Claude model of the same alias name, and
+never by reading the user's `$CLAUDE_CONFIG_DIR` settings.
 Default DeepSeek wiring: `haiku`/`sonnet` → `deepseek-flash`, `opus`/`fable` → `deepseek-v4-pro`; on
 Anthropic the aliases map to the Claude models of those names. Flag:
 
 - **Error** — skill `model` is not one of `haiku`, `sonnet`, `opus`, `fable`, `best`, `opusplan`,
   `default`, `inherit`, or a full `claude-*` / `deepseek-*` model ID; or `effort` is not one of
   `low`, `medium`, `high`, `xhigh`, `max`.
-- **Error** — agent `model` is not one of `sonnet`, `opus`, `haiku`, `fable`, or a full model ID.
-  `best`, `opusplan`, `default`, and `inherit` are skill values only; agent frontmatter rejects them.
+- **Error** — agent `model` is not one of `sonnet`, `opus`, `haiku`, `fable`, `inherit`, or a full
+  model ID. `best`, `opusplan`, and `default` are skill values only; agent frontmatter rejects them.
 - **Warning** — the `(model, effort)` pair mismatches the work the file's body and description say
   it does, per the Selection Guide.
 - **Info** — `effort` is `medium` or `xhigh`: on the DeepSeek wiring both collapse to `high`, adding
@@ -290,7 +325,8 @@ names. Flag deprecated flags, old schema fields, outdated model names, and renam
 When unsure what is current, ask the `claude-code-guide` agent or WebFetch the official docs
 (`code.claude.com/docs`). Never assert "current" without a source: cite the doc URL or the agent's
 finding in every such finding. A repo claim no cited source supports is a **Warning** — the repo's
-reference files drive audits and must not carry unsourced rules.
+reference files drive audits and must not carry unsourced rules. Never read the user's global
+configuration as a standard or a counterexample.
 
 ### 13. Token Efficiency
 
@@ -308,9 +344,10 @@ correctness and modern-idiom, test rules, severity mapping, and the valid-patter
 false positives. For every changed `.py` file:
 
 1. Read the diff hunk **and** the full current file. The hunk alone hides the contract it sits in.
-2. If the file belongs to a uv project (nearest `pyproject.toml`), run that project's tests:
-   `uv run --project <project-dir> pytest`. If the project configures a linter, run it read-only.
-   Root scripts have neither — review them by reading.
+2. If the file belongs to a uv project (a `pyproject.toml` that covers it — see Repo shape in the
+   rulebook), run that project's tests: `uv run --project <project-dir> pytest`. If the project
+   configures a linter, run it read-only. Scripts outside a covering project are standalone: no
+   project tests, but `uv run ruff check <file>` is available read-only.
 3. Report each lint violation verbatim with its rule ID, and each failing test with its output. A
    Python finding cites real tool output or a rulebook section — never a guess, never a remembered
    rule.
@@ -385,6 +422,9 @@ No Errors or Warnings → state that and stop — no plan, no handoff.
 
 - Read-only. Writes no files, no plan file. Review summary and fix plan return as text to the
   caller.
+- Never touch `$CLAUDE_CONFIG_DIR` (unset → `~/.claude`). It is the user's machine configuration,
+  never review input: do not read, list, diff, or cite it — see Scope Boundary. This plugin's own
+  `${CLAUDE_PLUGIN_ROOT}` files are the only exception.
 - Never edit, move, or delete a reviewed file. Beyond step 1 git scope checks, the diff reads steps 6
   and 11 require, and step 8 `test -f` checks, this skill runs only these read-only checks:
   `bash -n`, `shellcheck`, `uv run --project <dir> pytest`, and a project's configured linter. Never
@@ -448,6 +488,8 @@ No Errors or Warnings → state that and stop — no plan, no handoff.
 17. Every changed instruction file was compared against current Anthropic guidance, and each
     guidance finding cites a doc URL or a `claude-code-guide` result.
 18. The token-efficiency pass ran over every changed instruction file, with no meaning dropped.
+19. No path under `$CLAUDE_CONFIG_DIR` (unset → `~/.claude`) was read, diffed, reviewed, or cited;
+    any such path in the changeset was listed as excluded.
 
 ## Output (fixed order)
 
@@ -457,8 +499,10 @@ No Errors or Warnings → state that and stop — no plan, no handoff.
 3. **Changes** — brief bullets, one per change in the changeset, merged from the area reports.
 4. **Proposed commit message** — Conventional Commits subject, ≤80 chars; body only when the why is
    not obvious from the diff; no trailer by default, add only when explicitly asked.
-5. **Fix plan** — only when Errors or Warnings exist: the plan from step 17, plus the handoff line.
-6. **Clean result** — no findings: confirmation the changeset is clean; no fix plan, no handoff.
+5. **Excluded** — each path skipped as out of scope, with the reason (e.g. resolves into
+   `$CLAUDE_CONFIG_DIR` or an excluded class). Omit when nothing was excluded.
+6. **Fix plan** — only when Errors or Warnings exist: the plan from step 17, plus the handoff line.
+7. **Clean result** — no findings: confirmation the changeset is clean; no fix plan, no handoff.
 
 Summary line: number of files reviewed by class, number of findings by severity, and the review
 areas used with the agent that covered each.
