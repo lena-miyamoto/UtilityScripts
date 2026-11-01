@@ -6,6 +6,8 @@ user-invocable: true
 disable-model-invocation: true
 model: opus
 effort: high
+context: fork
+background: false
 ---
 
 # Optimize Repo
@@ -50,7 +52,7 @@ Skills and docs must point to these owners, not restate their rules.
 | Changeset review procedure                                   | `dev-utils` plugin: `skills/review-changeset/SKILL.md`      |
 | Fix application procedure                                    | `dev-utils` plugin: `skills/apply-fixes/SKILL.md`           |
 | Repo optimization and audit procedure                        | `dev-utils` plugin: `skills/optimize-repo/SKILL.md`         |
-| Instruction file compression                                 | user-level `compress-instructions` skill                    |
+| Instruction file compression                                 | `dev-utils` plugin: `skills/compress-instructions/SKILL.md` |
 | Context engineering best practices                           | `${CLAUDE_PLUGIN_ROOT}/references/context-engineering-best-practices.md` |
 | Python review rulebook                                       | `${CLAUDE_PLUGIN_ROOT}/references/python-review.md`         |
 | Model/effort semantics                                       | `${CLAUDE_PLUGIN_ROOT}/references/model-capabilities.md`    |
@@ -114,9 +116,6 @@ Skills and docs must point to these owners, not restate their rules.
      resource file in a `references/` subdirectory with YAML frontmatter (`description`). Replace
      with an explicit "Read `<path>` when `<condition>`" instruction. Keep core identity, safety
      rules, writing rules, and always-needed procedures inline.
-     - After splitting, optionally run `compress-instructions` on the slimmed core file. If
-       compressing, verify losslessness per the categories in `compress-instructions` before
-       accepting.
      - Never compress resource files extracted to `references/` — already self-contained and
        on-demand; compression risks content loss with no line-budget benefit.
 6. Keep discovery-critical frontmatter concise:
@@ -128,6 +127,16 @@ Skills and docs must point to these owners, not restate their rules.
      `agent-templates/` surfaces.
    - Repo docs advertise only surfaces worth exposing.
    - Every touched plugin has every version field it carries bumped and matching.
+8. **Compress every edited instruction file last.** After all other edits and re-checks, stop and
+   instruct the user to run `/dev-utils:compress-instructions` on every edited `*.md` instruction
+   file in this run — mandatory, never optional. `disable-model-invocation: true` makes the skill
+   user-only: do not call it, and do not reproduce its procedure. List the exact files to pass.
+   Exclude plugin manifests (`plugin.json`, `marketplace.json`), `*.sh`, `*.py`, and any file under
+   `references/`. Also exclude the skill's default-skipped files (`README.md`, `CONTRIBUTING.md`,
+   `DEVELOPMENT.md`, `CHANGELOG.md`). Never compress `references/` resource files (self-contained,
+   on-demand — no line-budget benefit, compression risks loss). After the user reports back, verify
+   lossless per the `compress-instructions` self-check. The user-level `compress-instructions` skill
+   duplicates this plugin copy — the user should retire it; the plugin copy is canonical.
 
 ## Redundancy Patterns
 
@@ -187,6 +196,13 @@ restatement).
 - Preserve keyword-rich frontmatter for discovery.
 - Prefer brevity and clarity over grammatical smoothness in every repo `*.md`.
 - Drop repetitive phrasing and padding when the meaning carries tighter.
+- **Compress `CLAUDE.md` aggressively — less is more.** Cut every line not needed for correctness,
+  safety, or discovery. Instruction-following degrades as instruction files grow, so keep it lean
+  and offload detail to on-demand `references/` files via pointers.
+- **Write NEVER/ALWAYS, not "prefer".** Hard guardrails survive; vague goals are ignored. State the
+  constraint ("ALWAYS run the tests"), not the aspiration ("prefer composition where it makes sense").
+- **List exact verify commands.** Name build/test/lint commands verbatim so no model has to infer the
+  verification loop.
 - Don't replace duplication with a new documentation layer.
 - Never write confidential data into a tracked file or a report.
 
@@ -204,8 +220,10 @@ restatement).
    sources of truth; and **lossy compression** — dropped emphasis keywords (CRITICAL, MUST, NEVER,
    ALWAYS, IMPORTANT, ESSENTIAL), stripped bold/italic formatting, lost temporal framing
    (before/after, sequencing), altered enumerated element counts or order, weakened identity-level
-   claims, or removed consequence statements. If compression was applied during the cleanup, verify
-   it was lossless per the `compress-instructions` self-check.
+   claims, or removed consequence statements. Confirm the user ran `/dev-utils:compress-instructions`
+   as the final step on every optimized file step 8 covers; a file step 8 excludes is legitimately
+   skipped, not a failure. After the user reports back, confirm the run was lossless per the
+   `compress-instructions` self-check.
 7. Confirm `CLAUDE.md` is compact and the hard rules remain clear.
 8. Confirm every touched plugin has matching `plugin.json` and `marketplace.json` versions, and
    `pyproject.toml` too when it bundles a Python project.
@@ -217,6 +235,7 @@ restatement).
 ## Output
 
 - Files optimized.
+- Files handed off for compression via `/dev-utils:compress-instructions` (final step).
 - Files audited, unchanged.
 - Validation performed.
 - Remaining inconsistencies left intentionally, with reason.

@@ -8,6 +8,16 @@ Never send such data directly to the AI model. CLI tools or Python scripts proce
 
 Before committing, verify no confidential values added to tracked files.
 
+## Global configs — hard rule
+
+Never edit any file anywhere under `$CLAUDE_CONFIG_DIR` (default `~/.claude`) — CLAUDE.md,
+settings.json, skills, agents. Deployment is always the user's action, never the agent's — do not
+install or copy changes into `$CLAUDE_CONFIG_DIR`. Exception: an agent may run a deployment skill's
+installer only when the user explicitly invokes that skill (e.g. `install-statusline`).
+Global templates live in `agent-templates/*-global/` and are edited in this repo like any other file.
+When the same skill or rule exists both globally and locally, the local one is canonical — point at
+it, never edit the deployed copy under `$CLAUDE_CONFIG_DIR`.
+
 ## Shared
 
 - Smallest local change that works; stale patch context → re-read exact snippet, retry.

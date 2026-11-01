@@ -110,8 +110,10 @@ concurrently; wait for every one to return.
 - `subagent_type: general-purpose`.
 - `model: sonnet`, `effort: high` — this file's frontmatter settings, unchanged for every area.
   Never raise or lower them per area, never omit them: an agent left on defaults does not match this
-  skill's settings. The downgrade from the Selection Guide's `opus` row is deliberate: up to 3 agents
-  run at once per review, and `effort: high` carries the reasoning load.
+  skill's settings. The step down from the Selection Guide's `opus` row is a deliberate cost
+  trade-off: up to 3 agents run at once per review. `effort: high` is the normal agentic level, not
+  a reasoning tier — under the default DeepSeek wiring the reasoning tier is reached only through
+  `opus` or `fable`.
 - One call per area, never more than 3.
 
 Briefs are self-contained — a fresh agent sees only the brief. Include exactly this, filled in:
@@ -453,7 +455,8 @@ No Errors or Warnings → state that and stop — no plan, no handoff.
 2. **Findings** — grouped by file, severity labels (Error / Warning / Info), each with `file:line`
    and the tool rule ID or output where a tool produced it. No findings → say so.
 3. **Changes** — brief bullets, one per change in the changeset, merged from the area reports.
-4. **Proposed commit message** — Conventional Commits subject, ≤50 chars, no body, no trailer.
+4. **Proposed commit message** — Conventional Commits subject, ≤80 chars; body only when the why is
+   not obvious from the diff; no trailer by default, add only when explicitly asked.
 5. **Fix plan** — only when Errors or Warnings exist: the plan from step 17, plus the handoff line.
 6. **Clean result** — no findings: confirmation the changeset is clean; no fix plan, no handoff.
 
