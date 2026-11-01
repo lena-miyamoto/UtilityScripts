@@ -6,7 +6,7 @@ System prompt covers: tone/length, no-comments, no speculative abstractions, no 
 
 Holds `env.ANTHROPIC_AUTH_TOKEN`. Never dump it, whole or partial — every tool, every agent, no exception.
 
-- Need one setting? Project the key, never the file: `jq -r '.env.ANTHROPIC_AUTH_TOKEN | if . then "set" else "unset" end' ~/.claude/settings.json`. Key *names* fine: `jq -r 'paths(scalars) | join(".")' ~/.claude/settings.json`.
+- Need one setting? Project the key, never the file: `jq -r '.env.ANTHROPIC_AUTH_TOKEN | if . then "set" else "unset" end' ~/.claude/settings.json`. Key _names_ fine: `jq -r 'paths(scalars) | join(".")' ~/.claude/settings.json`.
 - Never delegate the read to a subagent, paste the file into a prompt or agent brief, or write the value to a file, log, PR body, or issue.
 - **If it leaks anyway:** say so same turn, name the key, recommend rotating at provider. Never re-read.
 
@@ -56,7 +56,7 @@ Holds `env.ANTHROPIC_AUTH_TOKEN`. Never dump it, whole or partial — every tool
 
 ## Git and commits
 
-- Conventional Commits subject, ≤50 chars. Body only when _why_ not obvious from diff.
+- Conventional Commits subject, ≤80 chars. Body only when _why_ not obvious from diff.
 - **No `Co-Authored-By: Claude ...` trailer by default.** Add only when explicitly asked.
 
 ### Branch and worktree discipline
@@ -75,9 +75,3 @@ Holds `env.ANTHROPIC_AUTH_TOKEN`. Never dump it, whole or partial — every tool
 
 - **Use `gio trash` over `rm`/`rmdir` if available** — `gio trash <path>` recoverable, `rm` permanent. Inspect: `gio list trash://`. Linux/GNOME only; fall back to `rm` (`command -v gio`). Exception: files under `/tmp` are always removed with `rm`/`rmdir`, never `gio trash`.
 - If installed, prefer over hand-rolling: `gh` (GitHub PRs/issues/API), `jq`/`yq`/`xq` (JSON/YAML/XML over `sed`/`awk`), `difft` (structural diff for refactors), `rg` (search). `ast-grep`/`sg`: read forms (`run`, `scan`, `test`) pre-allowed; write forms (`-U`, `--update-all`, `new`) ask first.
-
-## About me
-
-- Lena Matscheko, senior software engineer. Stack: JavaScript/TypeScript, Node tooling, Python for scripts/data.
-- Testing: Vitest unit/integration, Playwright E2E, Jest in older repos. Integration > heavy mocking.
-- Experienced: skip basics unless asked; "why?" → reasoning, not restatement.
