@@ -16,11 +16,15 @@
     ],
     "Skill": [
       "^update-config$",
-      "^compress-instructions$",
       "^handoff$",
       "^grill-(me|with-docs)$",
       "^code-review$",
       "^codebase-design$",
+      "^(dev-utils:)?csv-tool$",
+      "^(dev-utils:)?apply-fixes$",
+      "^(dev-utils:)?optimize-repo$",
+      "^(dev-utils:)?review-changeset$",
+      "^(dev-utils:)?compress-instructions$",
       "^(statusline:)?install-statusline$"
     ],
     "Bash": [
