@@ -464,7 +464,7 @@ def _add_format(parser):
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        prog="csv-util",
+        prog="csv-tool",
         description="Inspect and transform CSV/TSV files (replaces mlr and csvkit).",
     )
     sub = parser.add_subparsers(dest="command", required=True)

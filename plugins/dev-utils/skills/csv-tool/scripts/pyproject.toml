@@ -1,0 +1,26 @@
+[project]
+name = "csv-tool"
+version = "0.6.4"
+description = "CSV/TSV inspection and transform utility, stdlib-only Python."
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+csv-tool = "csvtool:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["csvtool", "csv-util"]
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
+pythonpath = ["."]
+python_files = "test_*.py *_test.py test-*.py"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+]
