@@ -47,19 +47,19 @@ the subtree is.
      entirely in this fork. Most plans are this size.
    - Fan out when the plan touches 3+ files across 2+ independent areas: different plugins, setup
      script versus plugin, or unrelated file classes.
-   - Cap at 3 areas. More candidates → merge the most related or the smallest into a neighbouring
-     area. Never dispatch more than 3 agents.
+   - Cap at 6 areas. More candidates → merge the most related or the smallest into a neighbouring
+     area. Never dispatch more than 6 agents.
    - Never split a version bump from the plugin edits it covers, and never split files that must
      change together to stay consistent.
    - One area → no fan-out. Run steps 5–9 inline over the whole plan.
    - State the split in the final report.
-4. Fan out (2–3 areas only). Dispatch one agent per area; send **all** `Agent` calls in one message
+4. Fan out (2–6 areas only). Dispatch one agent per area; send **all** `Agent` calls in one message
    so they run concurrently, and wait for every one to return.
    - `subagent_type: general-purpose`.
    - `model` and `effort` at this file's frontmatter values, unchanged for every area. Never raise or
      lower them per area, never omit them. They match `review-changeset`'s coordinator settings, and
      `effort: high` carries the reasoning load.
-   - One call per area, never more than 3. Areas are disjoint — no file appears in two briefs.
+   - One call per area, never more than 6. Areas are disjoint — no file appears in two briefs.
    - Agent failed or returned an area incomplete → apply that area's items inline yourself and name
      the failure in the report.
 
@@ -151,7 +151,7 @@ the subtree is.
    and a plugin edit with no plan version was raised with the caller.
 6. `bash -n` ran after shell edits; `shellcheck` ran where installed; `git diff --check` ran after
    `*.md` edits; the owning project's tests ran after `*.py` edits.
-7. Fan-out decision stated; areas disjoint, at most 3 agents, no file in two briefs; every failed
+7. Fan-out decision stated; areas disjoint, at most 6 agents, no file in two briefs; every failed
    area was applied inline and named.
 8. Stale index reported when the review scope was staged; nothing staged or committed for the user.
 9. The caller receives a fix-by-fix report, including any deviation from the plan (e.g. a fixture

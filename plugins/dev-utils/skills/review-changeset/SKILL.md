@@ -5,7 +5,7 @@ description: >
              cross-file references in instruction files, repo-contract violations in changed
              Python and shell, plugin version drift, and confidential data. Auto-detects
              scope: staged changes if present, otherwise unstaged, splits the changeset into up
-             to three independent review areas, and fans out one parallel sub-agent per area
+             to six independent review areas, and fans out one parallel haiku sub-agent per area
              before merging the reports. Produces a structured findings report with a verdict, a
              change summary, and a proposed commit subject; returns a fix plan to the caller and
              hands off to `dev-utils:apply-fixes` when issues warrant it.
@@ -129,25 +129,33 @@ review alone. Do this before any review runs.
   `agent-templates/claude-global/CLAUDE.md` rules it owns; any changed pair where one file references
   the other. Splitting a coupled pair across agents loses this skill's highest-value comparison.
 - Split along natural seams: changed file class, plugin boundary, setup script versus plugin.
-- **Cap at 3 areas.** More candidates → merge the most related or the smallest into a neighbouring
-  area. Never dispatch more than 3 agents.
+- **Cap at 6 areas.** More candidates → merge the most related or the smallest into a neighbouring
+  area. Never dispatch more than 6 agents.
+- **Never split to reach the cap.** A small changeset stays at 2–3 areas. Six areas is for a large
+  multi-file changeset, where each area still holds one coherent unit; a coupled bundle is never
+  split just to fill the fan-out.
 - **One area → no fan-out.** Run steps 6–15 inline over the whole changeset, continue at step 16.
   Single-area changesets gain nothing from an agent and pay context twice.
 - State the split in the final report.
 
 ### 4. Fan Out Area Reviews
 
-Dispatch one agent per area (2–3 areas). Send **all** `Agent` calls in one message so they run
+Dispatch one agent per area (2–6 areas). Send **all** `Agent` calls in one message so they run
 concurrently; wait for every one to return.
 
 - `subagent_type: general-purpose`.
-- `model: sonnet`, `effort: high` — this file's frontmatter settings, unchanged for every area.
-  Never raise or lower them per area, never omit them: an agent left on defaults does not match this
-  skill's settings. The step down from the Selection Guide's `opus` row is a deliberate cost
-  trade-off: up to 3 agents run at once per review. `effort: high` is the normal agentic level, not
-  a reasoning tier — under the default DeepSeek wiring the reasoning tier is reached only through
-  `opus` or `fable`.
-- One call per area, never more than 3.
+- `model: haiku`, `effort: high` — fixed for every area. Never raise or lower them per area, never
+  omit them: an agent left on defaults does not match this skill's fan-out settings. The coordinator
+  keeps this file's `sonnet` frontmatter model; that setting does not carry over to the area agents.
+- The `haiku` choice is a deliberate cost trade-off below the Selection Guide's `opus` row, not a
+  capability claim: on the default DeepSeek wiring the step down is a no-op (`haiku` and `sonnet`
+  both resolve to `deepseek-flash`), while on Anthropic it is the weakest tier. Up to 6 haiku agents
+  run at once per review, buying breadth cheaply. Step 5's boundary-pair and coverage audit pass
+  exists to catch what the cheaper per-area read misses — the coordinator re-checks those
+  comparisons itself.
+- `effort: high` is the normal agentic level, not a reasoning tier — under the default DeepSeek
+  wiring the reasoning tier is reached only through `opus` or `fable`.
+- One call per area, never more than 6.
 
 Briefs are self-contained — a fresh agent sees only the brief. Include exactly this, filled in:
 
@@ -432,7 +440,7 @@ No Errors or Warnings → state that and stop — no plan, no handoff.
   backgrounded.
 - Never apply fixes. Skill stops at the handoff — `dev-utils:apply-fixes` owns approved fixes.
 - Never reproduce a confidential value. Report `file:line` and type only.
-- Never dispatch more than 3 area agents, never dispatch them one at a time, and never narrow a brief
+- Never dispatch more than 6 area agents, never dispatch them one at a time, and never narrow a brief
   to a "quick pass". An area agent that skips checks creates the blind spot the fan-out is for.
 - Coordinator owns the final report. Never pass an area report through unmerged; never drop a finding
   because another area covers similar ground.
@@ -454,9 +462,9 @@ No Errors or Warnings → state that and stop — no plan, no handoff.
 
 1. Diff scope auto-detected correctly — staged if present, otherwise unstaged; stated in the report;
    staged and unstaged never mixed.
-2. Every reviewable file assigned to exactly one area, none dropped, area count ≤ 3, split stated in
+2. Every reviewable file assigned to exactly one area, none dropped, area count ≤ 6, split stated in
    the report.
-3. All area agents dispatched in one message with `model: sonnet` and `effort: high`; every
+3. All area agents dispatched in one message with `model: haiku` and `effort: high`; every
    dispatched agent returned before assembly; any failed agent is named and its area was reviewed
    inline.
 4. Every changed reviewable file read in full by its area agent or by you when reviewing inline; for
