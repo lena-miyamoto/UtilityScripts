@@ -1,5 +1,5 @@
 {
-  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "lena-miyamoto",
   "description": "Lena's personal Claude Code plugin marketplace.",
   "owner": {
@@ -11,19 +11,19 @@
       "name": "tool-permissions",
       "source": "./plugins/tool-permissions",
       "description": "Regex-based allow/ask/deny PreToolUse permission hook for Claude Code.",
-      "version": "0.10.0"
+      "version": "0.10.1"
     },
     {
       "name": "statusline",
       "source": "./plugins/statusline",
       "description": "Custom Claude Code statusline (main bar + subagent rows).",
-      "version": "0.2.0"
+      "version": "0.2.1"
     },
     {
       "name": "dev-utils",
       "source": "./plugins/dev-utils",
       "description": "Changeset review, fix application, instruction-file optimization and compression, and CSV/TSV inspection and transform skills for Claude Code.",
-      "version": "0.5.1"
+      "version": "0.6.4"
     }
   ]
 }
