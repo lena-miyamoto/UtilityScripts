@@ -231,8 +231,9 @@ restatement).
 6. Re-read changed `*.md` for: padding; repeated phrases; stale owner references; accidental second
    sources of truth; and **lossy compression** — dropped emphasis keywords (CRITICAL, MUST, NEVER,
    ALWAYS, IMPORTANT, ESSENTIAL), stripped bold/italic formatting, lost temporal framing
-   (before/after, sequencing), altered enumerated element counts or order, weakened identity-level
-   claims, or removed consequence statements. Confirm the user ran `/dev-utils:compress-instructions`
+   (before/after, sequencing), altered enumerated element counts or order (splitting one bullet
+   into sub-bullets preserves the count), weakened identity-level claims, or removed consequence
+   statements. Confirm the user ran `/dev-utils:compress-instructions`
    as the final step on every optimized file step 8 covers; a file step 8 excludes is legitimately
    skipped, not a failure. After the user reports back, confirm the run was lossless per the
    `compress-instructions` self-check.

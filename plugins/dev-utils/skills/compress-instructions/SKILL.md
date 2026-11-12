@@ -12,7 +12,7 @@ background: false
 
 # compress-instructions
 
-Compress instruction `.md` files. Cut token cost, keep meaning exact.
+Compress instruction `.md` files. Cut token cost, keep meaning exact. Restructure for parseability — split overloaded bullets, normalize delimiters.
 
 Meaning exact = every instruction, constraint, and outcome survives. Text with no bearing on execution is not meaning — cut it.
 
@@ -123,6 +123,29 @@ Still load-bearing — never cut:
 - Merge or cut bullets/examples making the same point twice.
 - Comparatives (more than N, at least N, no more than N, up to N) → keep direction exact. Don't collapse to shorthand like "N+" — that can silently shift the threshold.
 
+### Structure — parseability
+
+Restructure while compressing, lossless (all six Lossless categories, see Lossless definition). Splitting an overloaded bullet into sub-bullets is allowed; never flatten existing list nesting.
+
+- **One rule = one bullet.** A bullet packing two independent rules, or a rule + rationale, → split into a parent bullet + indented sub-bullet. Keep the parent's clause order and substance; apply only word-level compression and punctuation normalization within each clause.
+- **Split dense bullets.** A bullet chaining rule + trigger + allowlist + examples with em-dashes → one clause per sub-bullet. Same constraint: clause order and substance unchanged; only word-level compression and punctuation normalization within each clause.
+- **Standardize delimiters.** `→` only for "condition → action". `:` only for "label: value/list". `—` only as prose (explanation), never as a rule-part separator. Convert "condition: action" to "condition → action". Don't touch `:` inside code spans (`action: remove`). Applies to files being compressed; this file's existing arrows stay.
+- **One dominant bullet pattern per section.** Imperative-first or trigger-first → align strays to the section's majority. Reorder the lead-in only, not the meaning. When both apply, split first, then reorder the lead-in.
+- **Apply only where it helps.** Overloaded bullets and mixed delimiters get restructured; already-clean bullets keep their structure; word-level compression still applies. Don't split every bullet or churn consistent delimiters.
+
+### CLAUDE.md: overrides-only delta
+
+`CLAUDE.md` (and any instruction file that is a delta on the system prompt / harness) documents *overrides*, not the full spec. The baseline already binds base behaviour — restating it is inert. Optimize against the baseline, not as a standalone document.
+
+- **Delete system-prompt restatement.** Text that only repeats what the system prompt or harness already binds → inert → delete. Same test as inert: could this line change what the executor does, given the baseline covers it? No → cut. Precedence: a repo convention that shapes judgement stays even when it restates a baseline (see Still load-bearing); delete only pure restatement with no repo-specific narrowing. Unsure whether the baseline binds it → keep (tiebreaker applies).
+- **Kill the table-of-contents preamble.** "System prompt covers: X, Y, Z" enumerations summarize what is elsewhere; they bind nothing. Replace with a one-line marker if one is needed — "Below = overrides only. Hard rules always win." — else delete outright.
+- **Delete redundant intra-file cross-references.** A bullet pointing at an earlier section ("never dump that either — see first section") restates that section. Cut the pointer; the earlier section already binds.
+- **Keep rationale only when it constrains the decision.** Preserve the mechanism defining a rule's boundary ("hook auto-evaluates Bash; interpreter opaque → forces review"); cut the marginal value-add ("cheap to approve").
+- **Cut platform/availability qualifiers already encoded by a check.** "Linux/GNOME only" beside `command -v gio` — the availability check IS the portability. Qualifier is restatement → delete.
+- **Merge overlapping rules across sections.** Same constraint stated in two sections → one canonical location, delete the other.
+- **Apply Structure — parseability as usual.** This file type is a canonical example.
+- **Boundary: never add rules during a compress pass.** Optimizing a CLAUDE.md often surfaces a missing hard rule (e.g., "never stage/commit/push", `sed` safety forms). Adding one changes meaning — violates lossless. Report the surfaced rule to the caller in the final message as `Surfaced rule: <rule> | <file>`; never add it yourself.
+
 ### Tiebreaker: when in doubt, preserve
 
 Compression biases toward cutting. Counter:
@@ -141,7 +164,7 @@ Not an excuse to skip — a rule against over-compression. Compress aggressively
 - Technical terms, proper nouns, numbers, dates, version strings
 - Emphasis keywords beyond must/should/never/always: `CRITICAL`, `IMPORTANT:`, `YOU MUST`, `ESSENTIAL`,
   `MANDATORY`, `NOT OPTIONAL` — treat as obligation words, never weaken or drop.
-- Headings (exact text + order), list nesting, table structure (compress cell text only), frontmatter/YAML
+- Headings (exact text + order), list nesting (never flatten), table structure (compress cell text only), frontmatter/YAML
 
 ### Self-check before done
 
@@ -164,6 +187,8 @@ Self-check runs twice: per-section during editing (step 6c), full-file review af
   and direction?
 - Trailing newline still there?
 - **Diff scan:** review every removal. For each, confirm it was inert, or sits outside all six Lossless categories. Flag ambiguous removals — restore if not confidently safe.
+- Structure — parseability applied only where it helps: overloaded bullets split, delimiters normalized, no meaning reworded?
+- No new rules added — surfaced gaps flagged, not folded in?
 
 Any check fails → fix directly. Don't restart from scratch. If 3+ checks fail, re-edit offending sections against original, re-run full-file review.
 
