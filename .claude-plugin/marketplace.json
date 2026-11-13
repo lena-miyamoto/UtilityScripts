@@ -17,7 +17,7 @@
       "name": "statusline",
       "source": "./plugins/statusline",
       "description": "Custom Claude Code statusline (main bar + subagent rows).",
-      "version": "0.2.1"
+      "version": "0.2.3"
     },
     {
       "name": "dev-utils",

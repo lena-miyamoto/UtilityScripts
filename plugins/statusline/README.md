@@ -5,8 +5,15 @@ both stdlib-only Python run through `uv`:
 
 - `statusline` — the main bottom bar (model, context bar, git branch/worktree,
   vim mode, rate limits, cost).
-- `subagent-statusline` — per-row body for the subagent panel (name ·
-  description, a compact context bar, model, effort).
+- `subagent-statusline` — per-row body for the subagent panel: status, name,
+  agent type, description/label, context bar, token sparkline, age, model,
+  effort, and the basename of any task `cwd` that differs from the session
+  `cwd`, truncated to the row's `columns`.
+
+> **`subagentStatusLine` requires Claude Code 2.1.322 or older.** 2.1.323
+> removed the setting; it loads but has no effect. Pin 2.1.322 with
+> `claude install 2.1.322` and `DISABLE_AUTOUPDATER=1` — see
+> [`statusline/README.md`](statusline/README.md#pinning-claude-code).
 
 See [`statusline/README.md`](statusline/README.md) for the script contract and
 layout.

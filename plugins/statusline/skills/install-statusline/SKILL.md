@@ -15,3 +15,8 @@ Run the installer bundled with this plugin — Claude Code substitutes
 It syncs the `uv` project, then merges `statusLine` and `subagentStatusLine`
 into the global `settings.json` (`$CLAUDE_CONFIG_DIR`, default `~/.claude`),
 preserving every other key. Idempotent — safe to re-run.
+
+`subagentStatusLine` only works on Claude Code 2.1.322 or older. On 2.1.323+
+the installer prints a warning; those rows stay on the built-in look until
+Claude Code is pinned back to 2.1.322 (see
+`../../statusline/README.md#pinning-claude-code`).

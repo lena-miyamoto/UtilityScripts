@@ -6,7 +6,7 @@ dependencies.
 
 Layout, left to right:
 
-```
+```text
 <model> [<agent>] ⚡<effort> 🧠  [<ctx bar>] <used%>  <in>/<size>  ♻️ <cache>  ⑂ <worktree>  ⎇ <branch>  [<vim mode>]  ⏰ <rate%>  💳 <monthly cost>
 ```
 
@@ -47,6 +47,10 @@ models; `CLAUDE_CONFIG_DIR` overrides config location.
 
 ## Subagent statusline
 
+> **Claude Code 2.1.322 or older only.** 2.1.323 removed `subagentStatusLine`:
+> the key loads without error but has no effect, and subagent rows always use
+> the built-in look. See [Pinning Claude Code](#pinning-claude-code).
+
 `subagent-statusline` renders the per-row body for the subagent panel
 (`subagentStatusLine`). It receives one JSON object on stdin — the base hook
 fields plus `columns` and a `tasks` array — and writes one JSON line per row:
@@ -55,11 +59,61 @@ fields plus `columns` and a `tasks` array — and writes one JSON line per row:
 {"id": "<task id>", "content": "<row body>"}
 ```
 
-Each task has `id`, `name`, `type`, `status`, `description`, `label`,
-`startTime`, `model`, `effort`, `contextWindowSize`, `tokenCount`,
-`tokenSamples`, and `cwd`. The row shows `name · description`, a compact 8-char
-context bar with `tokenCount/contextWindowSize` (when the model's context window
-is resolved), the model id, and `⚡effort`. Tasks without an `id` are skipped.
+Row body, in order:
+
+```text
+<status> <name> [<agentType>] · <description> · <label>  [<bar>] <pct> <tokens>/<size> <spark> <age>  <model> ⚡<effort>  <cwd>
+```
+
+All 2.1.322 task fields, plus top-level `columns`, are consumed:
+
+| Field                 | Use                                                                                                   |
+| --------------------- | ----------------------------------------------------------------------------------------------------- |
+| `id`                  | Output key; skipped when absent                                                                       |
+| `name`                | Row label; falls back to `agentType`, `type`, `id`, then `?`                                          |
+| `agentType`           | Bracketed badge when it differs from the row label (e.g. `[Explore]`)                                 |
+| `type`                | Bracketed badge for non-`local_agent` types; suppressed when it equals `name` or `agentType`          |
+| `status`              | Colored glyph: `▶` running; `✓ completed`, `✗ failed`, `⊘ killed` show the glyph plus the status word |
+| `description`         | Work requested by the caller                                                                          |
+| `label`               | Live progress summary, appended after `description` when it differs                                   |
+| `startTime`           | Age, e.g. `12s`, `1m05s`, `2h03m`                                                                     |
+| `model`               | Model id, before the cwd suffix                                                                       |
+| `effort`              | `⚡<level>` after the model                                                                           |
+| `tokenCount`          | Tokens used; `80k tok` when no context size is known                                                  |
+| `contextWindowSize`   | 8-char context bar with percentage and `used/size`                                                    |
+| `tokenSamples`        | Sparkline of the last 8 samples (`▁`→`█`)                                                             |
+| `cwd`                 | Basename, only when it differs from the session's `cwd`                                               |
+| `columns` (top level) | Hard row width; ANSI-aware truncation with `…`                                                        |
+
+`columns` is measured in terminal columns, so wide (CJK/emoji) characters count
+as two. ANSI color sequences are preserved when a row is truncated.
+
+## Pinning Claude Code
+
+These steps target the native and npm installs; Homebrew, WinGet, and other
+package-manager installs do not auto-update in the background.
+
+The native installer updates in the background and would move you onto 2.1.323+.
+To stay on 2.1.322:
+
+1. Install it explicitly: `claude install 2.1.322`
+2. Disable background updates in the **global** `settings.json`
+   (`$CLAUDE_CONFIG_DIR`, default `~/.claude`):
+
+```json
+{
+  "env": {
+    "DISABLE_AUTOUPDATER": "1"
+  }
+}
+```
+
+3. Confirm with `claude doctor`: the `Auto-updates` line must read
+   `disabled (set by env: DISABLE_AUTOUPDATER)`.
+
+`DISABLE_AUTOUPDATER` stops background updates only; `claude update` still
+works. To block every update path, use `DISABLE_UPDATES` instead — but set it
+*after* installing 2.1.322, because it also blocks `claude install`.
 
 ## File layout
 

@@ -4,11 +4,29 @@ Imports the real ``statusline`` and ``shared`` modules — no re-pasted copies.
 Cost functions are monkeypatched in ``render`` tests so no filesystem scan runs.
 """
 
+import importlib.util
 import json
+import pathlib
+import subprocess
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import shared
 import statusline
+
+
+def _load_installer():
+    """Import ``install-statusline.py`` (hyphenated filename, not importable by name)."""
+    spec = importlib.util.spec_from_file_location(
+        "install_statusline",
+        pathlib.Path(__file__).with_name("install-statusline.py"),
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+install = _load_installer()
 
 # Deterministic peak/off-peak instants: 2026-09-15 is a Tuesday (UTC).
 OFFPEAK_MS = int(datetime(2026, 9, 15, 12, 0, tzinfo=timezone.utc).timestamp() * 1000)
@@ -301,3 +319,55 @@ def test_render_budget_left_pct(monkeypatch):
 def test_render_missing_model(monkeypatch):
     out = render({}, monkeypatch=monkeypatch)
     assert out.startswith("unknown  ")
+
+
+# ---------------------------------------------------------------------------
+# install-statusline
+# ---------------------------------------------------------------------------
+
+
+def test_version_tuple_parses_version():
+    assert install._version_tuple("2.1.322 (Claude Code)") == (2, 1, 322)
+    assert install._version_tuple("2.1.323") == (2, 1, 323)
+
+
+def test_version_tuple_returns_none_without_version():
+    assert install._version_tuple("unknown build") is None
+    assert install._version_tuple("") is None
+    assert install._version_tuple(None) is None
+
+
+def _fake_claude(monkeypatch, stdout=None, exc=None):
+    def run(*args, **kwargs):
+        if exc is not None:
+            raise exc
+        return SimpleNamespace(stdout=stdout)
+
+    monkeypatch.setattr(install.subprocess, "run", run)
+
+
+def test_warn_if_subagent_removed_silent_on_last_supported_version(monkeypatch, capsys):
+    _fake_claude(monkeypatch, stdout="2.1.322 (Claude Code)")
+    install.warn_if_subagent_removed()
+    assert capsys.readouterr().err == ""
+
+
+def test_warn_if_subagent_removed_warns_on_2_1_323(monkeypatch, capsys):
+    _fake_claude(monkeypatch, stdout="2.1.323 (Claude Code)")
+    install.warn_if_subagent_removed()
+    err = capsys.readouterr().err
+    assert "warning: Claude Code 2.1.323 ignores subagentStatusLine" in err
+    assert "claude install 2.1.322" in err
+
+
+def test_warn_if_subagent_removed_silent_on_unparsable_version(monkeypatch, capsys):
+    _fake_claude(monkeypatch, stdout="unknown build")
+    install.warn_if_subagent_removed()
+    assert capsys.readouterr().err == ""
+
+
+def test_warn_if_subagent_removed_silent_on_subprocess_failure(monkeypatch, capsys):
+    for exc in (OSError("claude missing"), subprocess.SubprocessError("boom")):
+        _fake_claude(monkeypatch, exc=exc)
+        install.warn_if_subagent_removed()
+        assert capsys.readouterr().err == ""

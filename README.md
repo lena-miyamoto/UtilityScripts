@@ -13,7 +13,7 @@ claude plugin install tool-permissions@lena-miyamoto
 
 The hook enforces a regex-based allow/ask/deny policy (schema and a full example in [`agent-templates/claude-global/permissions.json`](agent-templates/claude-global/permissions.json)) on every tool call. It requires Python 3.13+ and `uv`; on first use `uv run` provisions the virtualenv and downloads `rable` automatically. The marketplace manifest lives in [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json).
 
-The [`statusline`](plugins/statusline/README.md) plugin ships the custom Claude Code statusline as stdlib-only Python run through `uv` — the main bottom bar (model, context bar, git branch/worktree, vim mode, rate limits, cost) plus a per-row `subagentStatusLine`. Both bars are wired into `~/.claude/settings.json` by the bundled `install-statusline` skill (a plugin cannot enable the main `statusLine` declaratively).
+The [`statusline`](plugins/statusline/README.md) plugin ships the custom Claude Code statusline as stdlib-only Python run through `uv` — the main bottom bar (model, context bar, git branch/worktree, vim mode, rate limits, cost) plus a per-row `subagentStatusLine` (Claude Code 2.1.322 or older). Both bars are wired into the global `settings.json` (`$CLAUDE_CONFIG_DIR`, default `~/.claude`) by the bundled `install-statusline` skill (a plugin cannot enable the main `statusLine` declaratively).
 
 ```bash
 claude plugin install statusline@lena-miyamoto

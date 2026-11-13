@@ -7,12 +7,16 @@ Deterministic, stdlib-only, idempotent. Run directly:
 Provisions the ``uv`` virtualenv (``uv sync``), then merges ``statusLine`` and
 ``subagentStatusLine`` into the global settings file (under ``$CLAUDE_CONFIG_DIR``,
 defaulting to ``~/.claude``), preserving every other key.
+
+``subagentStatusLine`` only works on Claude Code 2.1.322 or older; 2.1.323
+removed it. The installer warns when the running ``claude`` is newer.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -23,15 +27,43 @@ SETTINGS = Path(os.environ.get("CLAUDE_CONFIG_DIR") or HOME / ".claude") / "sett
 STATUSLINE_CMD = "uv run --no-sync --project {dir} statusline"
 SUBAGENT_CMD = "uv run --no-sync --project {dir} subagent-statusline"
 
+LAST_SUBAGENT_VERSION = (2, 1, 322)
+
+
+def _version_tuple(text):
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", text or "")
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def warn_if_subagent_removed():
+    """Warn when Claude Code is too new to run subagent rows."""
+    try:
+        result = subprocess.run(
+            ["claude", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return
+    version = _version_tuple(result.stdout)
+    if version and version > LAST_SUBAGENT_VERSION:
+        shown = ".".join(str(part) for part in version)
+        print(
+            f"warning: Claude Code {shown} ignores subagentStatusLine "
+            "(removed in 2.1.323). Pin 2.1.322 with `claude install 2.1.322` "
+            "and DISABLE_AUTOUPDATER=1; see README.md#pinning-claude-code",
+            file=sys.stderr,
+        )
+
 
 def main() -> int:
     project_dir = Path(__file__).resolve().parent
+    warn_if_subagent_removed()
 
     # Provision the venv so the wired --no-sync command works.
     try:
-        sync = subprocess.run(
-            ["uv", "sync", "--project", str(project_dir)], check=False
-        )
+        sync = subprocess.run(["uv", "sync", "--project", str(project_dir)], check=False)
     except FileNotFoundError:
         print("warning: `uv` not found on PATH; statusline may not run", file=sys.stderr)
     else:
