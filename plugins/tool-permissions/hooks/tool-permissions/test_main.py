@@ -137,10 +137,10 @@ def test_aggregation_all_asks_listed():
 
 def test_aggregation_pipe_bare_redirect_child():
     # `|&` becomes a bare `(redirect ">&" 1)` pipe child on the left command.
-    r = ev("echo hi |& cat")
+    r = ev("echo hi |& git")
     assert r.decision == "ask"
     assert "echo hi >& 1" in r.cmds
-    assert "cat" in r.cmds
+    assert "git" in r.cmds
 
 
 def test_aggregation_unsafe_sibling_filtered():
@@ -479,10 +479,10 @@ def test_bare_wrapper_named_not_blank():
 
 def test_wrapper_in_pipeline_no_blank_prompt():
     # `env` as a pipeline head used to normalize to an empty command and surface
-    # as a blank "" line in the ask prompt (the grep sub-command is unknown here).
-    r = ev("env | grep -i foo")
+    # as a blank "" line in the ask prompt (the git sub-command is unknown here).
+    r = ev("env | git status")
     assert r.decision == "ask"
-    assert r.cmds == ["env", "grep -i foo"]
+    assert r.cmds == ["env", "git status"]
 
 
 def test_lone_allowed_substitution_named_not_blank():
@@ -496,14 +496,15 @@ def test_lone_allowed_substitution_named_not_blank():
 def test_assignment_line_not_in_prompt():
     # Regression: the assignment `ids="$1"` inside a function body used to
     # normalize to an empty command and surface as a blank "" line in the ask
-    # prompt. It must be dropped, leaving only the real sub-commands.
+    # prompt. It must be dropped, leaving only the real sub-commands. (`jq -r .`
+    # is now implicitly allowed as a read-only command, so it drops out of the
+    # ask prompt.)
     cmd = 'fetch() { ids="$1"; curl -s "https://example.com/?id=$ids" | jq -r .; }\n'
     cmd += 'echo "=== X ==="; fetch "1"'
     r = ev(cmd)
     assert "" not in r.cmds
     assert r.cmds == [
         'curl -s "https://example.com/?id=$ids"',
-        "jq -r .",
         'echo "=== X ==="',
     ]
 
@@ -537,6 +538,16 @@ def test_extract_procsubs_quotes_are_literal():
 def test_extract_procsubs_unbalanced():
     assert main.extract_procsubs("<(echo hi") is None
     assert main.extract_procsubs("echo <(a") is None
+
+
+def test_strip_procsubs_unbalanced():
+    # strip_procsubs fails closed (None) on an unbalanced `<(`/`>(` marker, so
+    # evaluate_command's step-1b guard asks rather than recursing into a
+    # half-parsed body. rable never reaches that guard — a spaced `<(` is split
+    # off into words, an attached `<(` raises UnparseableCommand (→ ask) — so
+    # the contract is asserted here at the function level.
+    assert main.strip_procsubs(["x<(y"], []) is None
+    assert main.strip_procsubs([], [("<", "<(echo hi")]) is None
 
 
 def test_strip_procsubs_words_and_redirects():
@@ -585,10 +596,6 @@ def test_procsub_recursion_quoted_not_recursed():
 def test_procsub_recursion_nested():
     s = src(allow={"Bash": [r"^diff(\s|$)", r"^cat(\s|$)", r"^echo(\s|$)"]})
     assert ev("diff <(cat <(echo hi))", s).decision == "allow"
-
-
-def test_procsub_recursion_unbalanced_ask():
-    assert ev("diff <(echo hi").decision == "ask"
 
 
 def test_procsub_recursion_declared_function():
@@ -749,8 +756,10 @@ def test_xargs_unsafe_on_original():
 
 
 def test_xargs_timeout_composition():
-    # normalize strips `timeout 5`, then xargs delegates to `rg`.
-    assert ev("timeout 5 xargs rg pattern").decision == "ask"
+    # normalize strips `timeout 5`; xargs delegates to the unknown `git status`,
+    # so the ask must come from the delegation (the outer `xargs` is allowed).
+    s = src(allow={"Bash": [r"^xargs(\s|$)"]})
+    assert ev("timeout 5 xargs git status", s).decision == "ask"
 
 
 def test_xargs_arg_file_path_protected():
@@ -1100,6 +1109,65 @@ def test_operand_roles_table():
     assert main._operand_roles("sed", ["a"], None, sed_in_place=True) == [(False, True)]
 
 
+def test_io_path_writer_operand_classification(monkeypatch):
+    # E2: `sort -o`/`--output` writes its flag value; `xxd IN OUT` and
+    # `uniq IN OUT` write their second positional operand.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    inputs, outputs = main._io_paths("sort", ["sort", "-o", "out", "in"], [])
+    assert inputs == [main._resolve_path("in")]
+    assert outputs == [main._resolve_path("out")]
+    inputs, outputs = main._io_paths("sort", ["sort", "--output=out", "in"], [])
+    assert inputs == [main._resolve_path("in")]
+    assert outputs == [main._resolve_path("out")]
+    inputs, outputs = main._io_paths("sort", ["sort", "--out=out", "in"], [])
+    assert inputs == [main._resolve_path("in")]
+    assert outputs == [main._resolve_path("out")]
+    inputs, outputs = main._io_paths("sort", ["sort", "--out", "out", "in"], [])
+    assert inputs == [main._resolve_path("in")]
+    assert outputs == [main._resolve_path("out")]
+    inputs, outputs = main._io_paths("sort", ["sort", "-no", "out", "in"], [])
+    assert inputs == [main._resolve_path("in")]
+    assert outputs == [main._resolve_path("out")]
+    inputs, outputs = main._io_paths("xxd", ["xxd", "in", "out"], [])
+    assert inputs == [main._resolve_path("in")]
+    assert outputs == [main._resolve_path("out")]
+    inputs, outputs = main._io_paths("uniq", ["uniq", "in", "out"], [])
+    assert inputs == [main._resolve_path("in")]
+    assert outputs == [main._resolve_path("out")]
+
+
+def test_io_path_sort_separator_value_not_output(monkeypatch):
+    # F14: in `sort -to in`, the `o` is -t's separator value, not `-o`, so `in`
+    # stays an input. A bundled `-no` still marks its value as an output.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    inputs, outputs = main._io_paths("sort", ["sort", "-to", "in"], [])
+    assert inputs == [main._resolve_path("in")]
+    assert outputs == []
+    inputs, outputs = main._io_paths("sort", ["sort", "-no", "out", "in"], [])
+    assert inputs == [main._resolve_path("in")]
+    assert outputs == [main._resolve_path("out")]
+
+
+def test_io_path_xxd_uniq_output_protected(monkeypatch):
+    # E2 end-to-end: the second operand of xxd/uniq is a write, so writing a
+    # protected policy file must hit the self-protection ask (not allow).
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(allow={"Bash": ["^xxd", "^uniq"]})
+    assert ev("xxd in.txt .claude/permissions.json", s).decision == "ask"
+    assert ev("uniq in.txt .claude/permissions.json", s).decision == "ask"
+
+
+def test_io_path_sort_abbrev_output_protected(monkeypatch):
+    # Residual fix: `sort --out=FILE`/`--out FILE`/`-no FILE` name an output via
+    # abbreviation/bundling, so a protected target must still be caught under an
+    # explicit broad `^sort` allow (the implicit-allow gate does not apply here).
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(allow={"Bash": ["^sort"]})
+    assert ev("sort --out=.claude/permissions.json in.txt", s).decision == "ask"
+    assert ev("sort --out .claude/permissions.json in.txt", s).decision == "ask"
+    assert ev("sort -no .claude/permissions.json in.txt", s).decision == "ask"
+
+
 def test_io_path_cp_dest_mutating_deny(monkeypatch):
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
     s = src(allow={"Bash": ["^cp"]}, deny={"Edit": [f"^{HOME_RE}/dest$"]})
@@ -1168,11 +1236,12 @@ def test_io_path_fd_dup_redirect_not_a_path(monkeypatch):
 
 def test_io_path_unknown_tool_read_only(monkeypatch):
     # Unknown commands keep the conservative default: operands are inputs (Read).
+    # (`mycmd` is genuinely unknown; `file` is in READ_ONLY_COMMANDS.)
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
-    edit = src(allow={"Bash": ["^file"]}, deny={"Edit": [f"^{HOME_RE}/foo$"]})
-    read = src(allow={"Bash": ["^file"]}, deny={"Read": [f"^{HOME_RE}/foo$"]})
-    assert ev(f"file {HOME}/foo", edit).decision == "allow"
-    assert ev(f"file {HOME}/foo", read).decision == "deny"
+    edit = src(allow={"Bash": ["^mycmd"]}, deny={"Edit": [f"^{HOME_RE}/foo$"]})
+    read = src(allow={"Bash": ["^mycmd"]}, deny={"Read": [f"^{HOME_RE}/foo$"]})
+    assert ev(f"mycmd {HOME}/foo", edit).decision == "allow"
+    assert ev(f"mycmd {HOME}/foo", read).decision == "deny"
 
 
 def test_io_path_mkdir_mutating_deny(monkeypatch):
@@ -1647,8 +1716,9 @@ PROTECTED = [
 def test_self_protection_matches():
     for p in PROTECTED:
         assert main.edits_protected_file("Edit", p) is True, p
-    # Read is not a mutating tool.
+    # Read is not a mutating tool; Bash is handled by bash_edits_protected_file.
     assert main.edits_protected_file("Read", PROTECTED[0]) is False
+    assert main.edits_protected_file("Bash", PROTECTED[0]) is False
 
 
 def test_self_protection_non_matches():
@@ -1670,6 +1740,270 @@ def test_self_protection_bash_redirect_write():
     s = src(allow={"Bash": ["^echo"]})
     r = ev(f"echo hi > {HOME}/.claude/settings.json", s)
     assert r.decision == "ask"
+
+
+def test_self_protection_bash_read_only_mention_allowed():
+    # A read-only command that merely *mentions* a protected policy file is not
+    # an edit. The Bash self-protection guard keys on write targets, so a
+    # project-level `git diff`/`grep` of `.claude/permissions.json` /
+    # `.claude/settings.local.json` stays allow-listed instead of flipping to
+    # ask on the file name alone.
+    s = src(allow={"Bash": ["^git diff", "^grep"]})
+    assert ev("git diff -- .claude/permissions.json", s).decision == "allow"
+    assert ev("git diff --cached -- .claude/permissions.json", s).decision == "allow"
+    assert ev("grep -n x .claude/settings.local.json > /dev/null", s).decision == "allow"
+
+
+def test_bash_edits_protected_file_outputs_only():
+    # The Bash guard distinguishes writes from mere mentions: only output
+    # operands and write-redirect targets trigger the self-protection ask.
+    assert (
+        main.bash_edits_protected_file(
+            "git", ["git", "diff", "--", ".claude/permissions.json"], []
+        )
+        is False
+    )
+    assert (
+        main.bash_edits_protected_file(
+            "echo", ["echo", "hi"], [(">", f"{HOME}/.claude/settings.json")]
+        )
+        is True
+    )
+    assert (
+        main.bash_edits_protected_file(
+            "sed", ["sed", "-i", "s/a/b/", ".claude/permissions.json"], []
+        )
+        is True
+    )
+    assert (
+        main.bash_edits_protected_file(
+            "cp", ["cp", "a", ".claude/permissions.json"], []
+        )
+        is True
+    )
+
+
+def test_bash_edits_protected_file_reference_writers():
+    # E5: writers whose target `_io_paths` cannot model are caught by scanning
+    # the raw command, while read-only mentions of the same file stay allowed.
+    assert (
+        main.bash_edits_protected_file(
+            "git", ["git", "checkout", "--", ".claude/permissions.json"], []
+        )
+        is True
+    )
+    assert (
+        main.bash_edits_protected_file(
+            "git", ["git", "restore", ".claude/settings.local.json"], []
+        )
+        is True
+    )
+    assert (
+        main.bash_edits_protected_file(
+            "touch", ["touch", ".claude/permissions.json"], []
+        )
+        is True
+    )
+    assert (
+        main.bash_edits_protected_file(
+            "patch", ["patch", "-p1", ".claude/permissions.json"], []
+        )
+        is True
+    )
+    assert (
+        main.bash_edits_protected_file(
+            "perl", ["perl", "-pi", "-e", "s/a/b/", ".claude/permissions.json"], []
+        )
+        is True
+    )
+    # perl without -i is not an in-place writer.
+    assert (
+        main.bash_edits_protected_file(
+            "perl", ["perl", "-e", "print 1", ".claude/permissions.json"], []
+        )
+        is False
+    )
+    assert (
+        main.bash_edits_protected_file(
+            "git", ["git", "diff", "--", ".claude/permissions.json"], []
+        )
+        is False
+    )
+
+
+def test_bash_edits_protected_file_extended_writers():
+    # F12: worktree-writing git subcommands and unmodeled reference writers are
+    # caught by the raw-command scan, while a read-only `git diff` stays False.
+    assert (
+        main.bash_edits_protected_file(
+            "git", ["git", "cherry-pick", "abc", ".claude/permissions.json"], []
+        )
+        is True
+    )
+    assert (
+        main.bash_edits_protected_file(
+            "tar", ["tar", "-cf", ".claude/permissions.json", "in"], []
+        )
+        is True
+    )
+    assert (
+        main.bash_edits_protected_file(
+            "git", ["git", "diff", "--", ".claude/permissions.json"], []
+        )
+        is False
+    )
+
+
+def test_bash_protected_reference_writer_asks(monkeypatch):
+    # E5 end-to-end: broad Bash allows must not let these writers edit the hook's
+    # own policy/config files.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(allow={"Bash": ["^git checkout", "^touch", "^perl -pi"]})
+    assert ev("git checkout -- .claude/permissions.json", s).decision == "ask"
+    assert ev("touch .claude/settings.json", s).decision == "ask"
+    assert (
+        ev("perl -pi -e 's/a/b/' .claude/permissions.json", s).decision == "ask"
+    )
+    # A read-only mention remains allowed.
+    s = src(allow={"Bash": ["^git diff"]})
+    assert ev("git diff -- .claude/permissions.json", s).decision == "allow"
+
+
+def test_read_only_command_implicit_allow(monkeypatch):
+    # Read-only text/file accessors are implicitly allowed to read, mirroring the
+    # Read file tool, without an explicit Bash allow-list entry.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    for cmd in (
+        "cat foo.txt",
+        "bat foo.txt",
+        "head -5 foo.txt",
+        "tail -5 foo.txt",
+        "less foo.txt",
+        "grep -n x foo.txt",
+        "egrep x foo.txt",
+        "rg x foo.txt",
+        "ag x foo.txt",
+        "cut -d, -f1 foo.csv",
+        "sort foo.txt",
+        "uniq foo.txt",
+        "wc -l foo.txt",
+        "diff a b",
+        "cmp a b",
+        "jq '.' foo.json",
+        "xq '.' foo.xml",
+        "file foo.txt",
+        "stat foo.txt",
+        "xxd foo.txt",
+        "od foo.txt",
+        "strings foo.txt",
+        "sha256sum foo.txt",
+    ):
+        assert ev(cmd).decision == "allow", cmd
+
+
+def test_read_only_command_unsafe_flag_not_implicitly_allowed(monkeypatch):
+    # A flag that turns a read-only command into a writer or executor must fall
+    # through to the default ask, never the implicit allow.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    assert ev("sort -o /tmp/out foo.txt").decision == "ask"
+    assert ev("sort --output=/tmp/out foo.txt").decision == "ask"
+    assert ev("sort --compress-program=gzip foo.txt").decision == "ask"
+    assert ev("sort --files0-from=list.txt").decision == "ask"
+    assert ev("yq -i '.a=1' file.yaml").decision == "ask"
+    assert ev("yq --inplace '.a=1' file.yaml").decision == "ask"
+    assert ev("xq -i '.a=1' file.xml").decision == "ask"
+    assert ev("rg --pre 'echo hi' x foo.txt").decision == "ask"
+    assert ev("rg --pre-glob '*.c' x foo.txt").decision == "ask"
+    # Bundled / abbreviated / post-value `--` forms must not slip through.
+    assert ev("sort -no /tmp/out foo.txt").decision == "ask"
+    assert ev("sort --out=/tmp/out foo.txt").decision == "ask"
+    assert ev("rg -e -- --pre 'echo hi' x foo.txt").decision == "ask"
+    assert ev("less -o /tmp/log foo.txt").decision == "ask"
+    assert ev("less -O /tmp/log foo.txt").decision == "ask"
+    assert ev("less --log-file /tmp/log foo.txt").decision == "ask"
+
+
+def test_read_only_pager_env_and_flag_not_implicitly_allowed(monkeypatch):
+    # F5: a viewer that runs a pager/input-preprocessor named by an environment
+    # variable or --pager/--paging executes arbitrary commands, so it must fall
+    # through to the default ask.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    assert ev("LESSOPEN='|sh -c \"id\"' less f").decision == "ask"
+    assert ev("bat --pager='sh -c \"id\"' file").decision == "ask"
+    # Plain invocations keep the implicit allow.
+    assert ev("less -N f").decision == "allow"
+    assert ev("bat f").decision == "allow"
+
+
+def test_read_only_command_read_deny_still_guarded(monkeypatch):
+    # The implicit allow is a seed, not a bypass: an explicit Read deny on the
+    # operand still blocks the read.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    s = src(deny={"Read": [f"^{HOME_RE}/\\.ssh/.*$"]})
+    assert ev(f"cat {HOME}/.ssh/id_rsa", s).decision == "deny"
+    assert ev(f"grep -n x {HOME}/.ssh/id_rsa", s).decision == "deny"
+
+
+def test_read_only_command_ambiguous_read_operand_asks(monkeypatch):
+    # E4: `.`/`..`, glob, and `$VAR` operands (and a pathless rg/ag cwd scan)
+    # resolve to no single concrete path, so a Read deny/ask must not be bypassed
+    # by the implicit allow.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    deny = src(deny={"Read": [f"^{HOME_RE}/\\.ssh/.*$"]})
+    assert ev("cat .", deny).decision == "ask"
+    assert ev("cat *.txt", deny).decision == "ask"
+    assert ev("cat {a,b}.txt", deny).decision == "ask"
+    assert ev("cat file{1,2}.log", deny).decision == "ask"
+    assert ev("cat $SECRET", deny).decision == "ask"
+    assert ev("cat < .", deny).decision == "ask"
+    assert ev("rg pattern", deny).decision == "ask"
+    assert ev("ag pattern", deny).decision == "ask"
+    # A concrete operand is still rule-checked and the implicit allow stands.
+    assert ev("cat foo.txt", deny).decision == "allow"
+    # Read ask rules downgrade the same way; a Read *allow* does not.
+    assert ev("cat .", src(ask={"Read": [".*"]})).decision == "ask"
+    assert ev("cat .", src(allow={"Read": [".*"]})).decision == "allow"
+
+
+def test_read_only_recursive_grep_asks(monkeypatch):
+    # F13: grep recurses only with -r/-R (or the long forms); a pathless
+    # recursive scan can reach a Read-protected file, so it asks. A plain
+    # `grep pattern` reads stdin and keeps the implicit allow.
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    deny = src(deny={"Read": [f"^{HOME_RE}/\\.ssh/.*$"]})
+    assert ev("grep -r pattern", deny).decision == "ask"
+    assert ev("grep -R pattern", deny).decision == "ask"
+    assert ev("grep -rn pattern", deny).decision == "ask"
+    assert ev("grep --recursive pattern", deny).decision == "ask"
+    assert ev("grep --dereference-recursive pattern", deny).decision == "ask"
+    assert ev("grep pattern", deny).decision == "allow"
+
+
+def test_has_unsafe_read_flag():
+    assert main._has_unsafe_read_flag("sort", ["sort", "-o", "out"]) is True
+    assert main._has_unsafe_read_flag("sort", ["sort", "--output=out", "in"]) is True
+    assert main._has_unsafe_read_flag("sort", ["sort", "-n", "in"]) is False
+    assert main._has_unsafe_read_flag("sort", ["sort", "--", "-o"]) is False
+    # Bundled short cluster: `-no` still carries the writer flag `-o`.
+    assert main._has_unsafe_read_flag("sort", ["sort", "-no", "out", "in"]) is True
+    # GNU long-option abbreviation: `--out` is an unambiguous prefix of `--output`.
+    assert main._has_unsafe_read_flag("sort", ["sort", "--out=out", "in"]) is True
+    # `--` consumed as `-e`'s value is not the end-of-options marker; `--pre` after
+    # it is still an option.
+    assert (
+        main._has_unsafe_read_flag("rg", ["rg", "-e", "--", "--pre", "CMD", "x", "f"])
+        is True
+    )
+    assert main._has_unsafe_read_flag("less", ["less", "-o", "log", "f"]) is True
+    assert main._has_unsafe_read_flag("less", ["less", "-O", "log", "f"]) is True
+    assert main._has_unsafe_read_flag("less", ["less", "--log-file", "log", "f"]) is True
+    assert main._has_unsafe_read_flag("less", ["less", "-N", "f"]) is False
+    assert main._has_unsafe_read_flag("yq", ["yq", "-i", ".a=1", "f.yaml"]) is True
+    assert main._has_unsafe_read_flag("yq", ["yq", ".a=1", "f.yaml"]) is False
+    assert main._has_unsafe_read_flag("xq", ["xq", "--in-place", ".", "f"]) is True
+    assert main._has_unsafe_read_flag("rg", ["rg", "--pre", "x", "f"]) is True
+    assert main._has_unsafe_read_flag("rg", ["rg", "-n", "x", "f"]) is False
+    assert main._has_unsafe_read_flag("cat", ["cat", "f"]) is False
 
 
 # ---------------------------------------------------------------------------
@@ -2007,9 +2341,14 @@ def test_invalid_regex_warns(capsys):
 
 
 @pytest.fixture
-def global_sources(monkeypatch):
+def global_sources(monkeypatch, tmp_path):
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
-    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    if not TEMPLATE.is_file():
+        pytest.skip(f"repo template not checked out: {TEMPLATE}")
+    cfg = tmp_path / "claude"
+    cfg.mkdir()
+    (cfg / "permissions.json").write_text(TEMPLATE.read_text(encoding="utf-8"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
     return main.load_permissions()
 
 

@@ -43,6 +43,129 @@ SAFE_BUILTINS = frozenset(
     }
 )
 
+# Read-only text/file accessors implicitly allowed to read files by default,
+# mirroring the Read file tool. Each is safe only in its default mode; commands
+# that can write or execute via a flag are listed in READ_ONLY_UNSAFE_*_FLAGS
+# below and only allowed when no such flag is present. Writes via `>`-redirect
+# remain governed by the mutating rules in step 7.
+READ_ONLY_COMMANDS = frozenset(
+    {
+        # viewers / dumpers
+        "cat", "bat", "batcat", "less", "more",
+        "zcat", "bzcat", "xzcat", "zstdcat", "lzcat",
+        "head", "tail",
+        "xxd", "od", "strings",
+        # search
+        "grep", "egrep", "fgrep", "rg", "ag",
+        # text shaping / comparison
+        "cut", "paste", "sort", "fmt", "fold", "rev", "tac", "nl",
+        "comm", "join", "uniq", "wc", "column",
+        "cmp", "diff", "colordiff", "delta", "difft",
+        # structured data / metadata / hashing
+        "jq", "xq", "yq",
+        "file", "stat",
+        "md5sum", "sha1sum", "sha256sum", "sha512sum", "b2sum",
+    }
+)
+
+# Flags that turn an otherwise read-only command into a writer or executor.
+# Long flags are compared by their `=`-stripped token (`--output=FILE` → `--output`);
+# short flags by prefix, so bundled (`-oFILE`) and separate-value (`-o FILE`)
+# forms are both caught.
+READ_ONLY_UNSAFE_LONG_FLAGS: dict[str, tuple[str, ...]] = {
+    "rg": ("--pre", "--pre-glob"),
+    "sort": ("--output", "--compress-program", "--files0-from"),
+    "less": ("--log-file", "--pager", "--paging"),
+    "more": ("--pager", "--paging"),
+    "bat": ("--pager", "--paging"),
+    "batcat": ("--pager", "--paging"),
+    "delta": ("--pager", "--paging"),
+    "yq": ("--inplace", "--in-place"),
+    "xq": ("--inplace", "--in-place"),
+}
+READ_ONLY_UNSAFE_SHORT_FLAGS: dict[str, tuple[str, ...]] = {
+    "sort": ("-o",),
+    "less": ("-o", "-O"),
+    "yq": ("-i",),
+    "xq": ("-i",),
+}
+
+
+def _option_may_take_value(raw: str) -> bool:
+    """True if `raw` looks like an option that can consume a separate value.
+
+    Used to disambiguate a `--` token: when the preceding word is an option, that
+    `--` may be the option's value (e.g. `rg -e --`) rather than the
+    end-of-options marker, so flag scanning must continue. Errs conservative — a
+    false positive only turns an implicit allow into a prompt.
+    """
+    tok = unquote_word(raw)
+    if not tok.startswith("-") or tok in ("-", "--"):
+        return False
+    if tok.startswith("--"):
+        return "=" not in tok  # `--flag=value` does not consume the next word
+    return True
+
+
+def _has_unsafe_read_flag(name: str, norm: list[str]) -> bool:
+    """True if a read-only command carries a flag that makes it write or execute.
+
+    Only flags *before* the real end-of-options `--` are considered. Long flags
+    match their `=`-stripped token or any unambiguous prefix (GNU abbreviation,
+    e.g. `--out` for `--output`). Short flag chars match anywhere in a bundled
+    cluster (`-no` carries `-o`). A `--` immediately preceded by an option is
+    treated as that option's value, not the end-of-options marker, so scanning
+    continues (conservative: a false positive is only a prompt).
+    """
+    unsafe_long = READ_ONLY_UNSAFE_LONG_FLAGS.get(name, ())
+    unsafe_short = tuple(
+        p[1:]
+        for p in READ_ONLY_UNSAFE_SHORT_FLAGS.get(name, ())
+        if p.startswith("-") and len(p) > 1
+    )
+    prev: str | None = None
+    for raw in norm[1:]:
+        tok = unquote_word(raw)
+        if tok == "--":
+            if prev is not None and _option_may_take_value(prev):
+                prev = tok
+                continue
+            break
+        if not tok.startswith("-") or tok == "-":
+            prev = tok
+            continue
+        if tok.startswith("--"):
+            base = tok.split("=", 1)[0]
+            if any(flag.startswith(base) for flag in unsafe_long):
+                return True
+        elif any(ch in tok[1:] for ch in unsafe_short):
+            return True
+        prev = tok
+    return False
+
+
+# Viewers that run a pager/input-preprocessor named by an environment variable.
+# An assignment (`LESSOPEN='|sh -c …' less f`) turns an otherwise read-only
+# viewer into an executor, so it must not feed the implicit allow.
+PAGER_ENV_COMMANDS = frozenset({"less", "more", "bat", "batcat", "delta"})
+PAGER_ENV_VARS = frozenset({"LESSOPEN", "LESSCLOSE", "BAT_PAGER", "DELTA_PAGER", "PAGER"})
+
+
+def _has_unsafe_pager_env(name: str, words: list[str]) -> bool:
+    """True if a viewer command carries a pager-hook env assignment word.
+
+    `normalize_words` strips leading `NAME=value` assignments, so the check must
+    scan the original raw `words` rather than the normalized command.
+    """
+    if name not in PAGER_ENV_COMMANDS:
+        return False
+    for word in words:
+        key, sep, _ = _strip_cr(word).partition("=")
+        if sep and key in PAGER_ENV_VARS:
+            return True
+    return False
+
+
 # Assignment-modifier keywords stripped before substitution-recursion detection.
 ASSIGNMENT_MODIFIERS = {"local", "export", "declare", "typeset", "readonly"}
 
@@ -103,12 +226,33 @@ OUTPUT_VALUE_FLAGS: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[str,
     "mutool": (("--output=",), ("o",), ("--output",)),
     "yt-dlp": (("--output=",), ("o",), ("--output",)),
     "unzip": (("--directory=",), ("d",), ("--directory",)),
+    "sort": (("--output=",), ("o",), ("--output",)),
     "curl": (("--output=", "--output-dir="), ("o",), ("--output", "--output-dir")),
     "wget": (
         ("--output-document=", "--directory-prefix="),
         ("O", "P"),
         ("--output-document", "--directory-prefix"),
     ),
+}
+
+# Short flags that consume a value (glued or as the next word) per command.
+# Tells a bundled cluster whose trailing char is an output flag (`sort -no` =
+# `-n -o`) from one where that char is a value-taking flag's glued value
+# (`sort -to` = `-t o`: the `o` is -t's separator, not `-o`).
+VALUE_SHORT_FLAGS: dict[str, tuple[str, ...]] = {
+    "sort": ("t", "k", "S", "T"),
+    "cp": ("S",),
+    "mv": ("S",),
+    "pandoc": ("f", "t", "V", "M", "c", "H", "B", "A", "D"),
+    "curl": (
+        "A", "b", "c", "C", "D", "d", "E", "e", "F", "H", "K", "m",
+        "P", "Q", "r", "T", "U", "u", "w", "X", "x", "Y", "y", "z",
+    ),
+    "wget": (
+        "O", "P", "e", "o", "a", "i", "t", "T", "w", "Q", "U", "B",
+        "D", "A", "R", "I", "X",
+    ),
+    "unzip": ("P", "x", "I", "O"),
 }
 
 # Commands whose LAST positional operand is the destination (output); earlier
@@ -118,13 +262,13 @@ LAST_ARG_IS_OUTPUT = {"cp", "mv", "rsync", "install", "ln"}
 
 # Commands whose output is only via an output-value flag (`-o`/`-d`); every
 # other operand is an input.
-OUTPUT_FLAG_COMMANDS = {"pandoc", "mutool", "yt-dlp", "unzip", "curl", "wget"}
+OUTPUT_FLAG_COMMANDS = {"pandoc", "mutool", "yt-dlp", "unzip", "curl", "wget", "sort"}
 
 # Commands that write/create/delete every operand (all outputs).
 ALL_OUTPUT_COMMANDS = {"rm", "rmdir", "unlink", "truncate", "shred", "mkdir", "tee"}
 
 # Commands whose FIRST positional operand is read and SECOND is written.
-FIRST_INPUT_SECOND_OUTPUT = {"pdftotext", "tesseract"}
+FIRST_INPUT_SECOND_OUTPUT = {"pdftotext", "tesseract", "xxd", "uniq"}
 
 # Commands whose first positional operand is a script/program, not a file path.
 # Skipped in path-argument checks so `sed 's/a/b/'` / `awk '{…}'` aren't
@@ -1953,14 +2097,17 @@ def _extract_bundled_short_value(word: str, flag_char: str) -> Optional[str]:
 
 def _extract_all_positional_args(
     after: list[str],
-    output_equals_prefixes: tuple[str, ...] = (),
     output_short_chars: tuple[str, ...] = (),
     output_long_flags: tuple[str, ...] = (),
+    value_short_chars: tuple[str, ...] = (),
 ) -> tuple[list[str], Optional[int]]:
     """Extract positional operands; also return the index of the first
-    output-value operand (the value of an output flag such as
-    `--target-directory=`, `--output=`, `-t DIR`, `-o DIR`, `--output DIR`, or
-    a bundled `-oDIR` short form), else None."""
+    output-value operand (the value of an output flag such as `-t DIR`,
+    `-o DIR`, `--output DIR`, `--output=DIR`, a bundled `-oDIR` short form, a
+    GNU long-option abbreviation `--out=DIR`, or a bundled cluster ending in
+    the output flag char `-no DIR`), else None. A cluster whose trailing
+    output char follows a value-taking short flag (`sort -to` = `-t o`) is
+    not an output flag."""
     args: list[str] = []
     output_idx: Optional[int] = None
     pending_output = False
@@ -1971,11 +2118,18 @@ def _extract_all_positional_args(
             continue
         if not end_of_flags and word.startswith("-") and word != "-":
             pending_output = False
-            eq = next((p for p in output_equals_prefixes if word.startswith(p)), None)
-            if eq is not None:
-                output_idx = len(args)
-                args.append(unquote_word(word[len(eq) :]))
-                continue
+            if word.startswith("--"):
+                # Long option, exact or GNU-abbreviated (`--out` for `--output`):
+                # `--flag=value` names the value inline, `--flag` takes the next
+                # word. Prefix matching mirrors getopt_long.
+                base, sep, val = word.partition("=")
+                if any(flag.startswith(base) for flag in output_long_flags):
+                    if sep:
+                        output_idx = len(args)
+                        args.append(unquote_word(val))
+                        continue
+                    pending_output = True
+                    continue
             bundled_found = False
             for ch in output_short_chars:
                 bundled = _extract_bundled_short_value(word, ch)
@@ -1986,7 +2140,17 @@ def _extract_all_positional_args(
                     break
             if bundled_found:
                 continue
-            if any(word == "-" + ch for ch in output_short_chars) or word in output_long_flags:
+            if any(word == "-" + ch for ch in output_short_chars):
+                pending_output = True
+                continue
+            # Bundled short cluster ending in an output flag char (`-no` for
+            # `-n -o`): the flag char's value is the next word.
+            if (
+                len(word) > 2
+                and re.match(r"^[a-zA-Z]+$", word[1:])
+                and word[-1] in output_short_chars
+                and not any(ch in value_short_chars for ch in word[1:-1])
+            ):
                 pending_output = True
             continue
         args.append(unquote_word(word))
@@ -2043,19 +2207,20 @@ def _operand_roles(
     return [(True, False)] * n  # default: read-only operands
 
 
-def check_io_path_rules(
-    sources: list[dict],
+def _io_paths(
     name: str,
     norm: list[str],
     redirects: list[tuple[str, str]],
-) -> Optional[Decision]:
-    """Read rules for input operands, mutating rules for output operands.
+) -> tuple[list[str], list[str]]:
+    """Classify a command's file operands + redirects into (inputs, outputs).
 
-    Positional operands are classified per `_operand_roles`; redirects are
-    classified by op (`<` input, write ops output). deny > ask > None.
+    Absolute paths, lexical resolution. Positional operands are classified per
+    `_operand_roles`; redirects by op (`<` input, write ops output).
     """
-    equals, shorts, longs = OUTPUT_VALUE_FLAGS.get(name, ((), (), ()))
-    args, output_idx = _extract_all_positional_args(norm[1:], equals, shorts, longs)
+    _, shorts, longs = OUTPUT_VALUE_FLAGS.get(name, ((), (), ()))
+    args, output_idx = _extract_all_positional_args(
+        norm[1:], shorts, longs, VALUE_SHORT_FLAGS.get(name, ())
+    )
     sed_in_place = name == "sed" and any(
         is_sed_in_place_flag(unquote_word(w)) for w in norm[1:]
     )
@@ -2087,10 +2252,110 @@ def check_io_path_rules(
             outputs.append(abs_t)
         else:
             inputs.append(abs_t)
+    return inputs, outputs
+
+
+def check_io_path_rules(
+    sources: list[dict],
+    name: str,
+    norm: list[str],
+    redirects: list[tuple[str, str]],
+) -> Optional[Decision]:
+    """Read rules for input operands, mutating rules for output operands. deny > ask > None."""
+    inputs, outputs = _io_paths(name, norm, redirects)
     return _merge_path_opinions(
         read_rule_opinion_for_paths(sources, inputs),
         _mutating_opinion_for_paths(sources, outputs),
     )
+
+
+# First positional operand is a pattern/filter/script, not a file path.
+PATTERN_FIRST_COMMANDS = frozenset(
+    {"grep", "egrep", "fgrep", "rg", "ag", "jq", "yq", "xq", "sed", "awk", "gawk", "mawk", "nawk"}
+)
+# Read-only search commands that recurse into directories. rg/ag do so by
+# default; grep/egrep/fgrep only when given -r/-R (or the long forms).
+RECURSIVE_SEARCH_COMMANDS = frozenset({"rg", "ag"})
+GREP_RECURSIVE_COMMANDS = frozenset({"grep", "egrep", "fgrep"})
+GREP_RECURSIVE_SHORT_CHARS = ("r", "R")
+GREP_RECURSIVE_LONG_FLAGS = ("--recursive", "--dereference-recursive")
+
+
+def _has_read_restrictive_rule(sources: list[dict]) -> bool:
+    """True if any source denies or asks a Read (a Read allow cannot be bypassed)."""
+    return any(
+        source.get(kind, {}).get("Read") for source in sources for kind in ("deny", "ask")
+    )
+
+
+def _is_recursive_search(name: str, norm: list[str]) -> bool:
+    """True if a search command recurses into directories (or the cwd).
+
+    rg/ag recurse by default; grep/egrep/fgrep only with -r/-R (bundled
+    clusters included) or --recursive/--dereference-recursive.
+    """
+    if name in RECURSIVE_SEARCH_COMMANDS:
+        return True
+    if name not in GREP_RECURSIVE_COMMANDS:
+        return False
+    prev: str | None = None
+    for raw in norm[1:]:
+        tok = unquote_word(raw)
+        if tok == "--":
+            if prev is not None and _option_may_take_value(prev):
+                prev = tok
+                continue
+            break
+        if not tok.startswith("-") or tok == "-":
+            prev = tok
+            continue
+        if tok.startswith("--"):
+            base = tok.split("=", 1)[0]
+            if any(flag.startswith(base) for flag in GREP_RECURSIVE_LONG_FLAGS):
+                return True
+        elif any(ch in tok[1:] for ch in GREP_RECURSIVE_SHORT_CHARS):
+            return True
+        prev = tok
+    return False
+
+
+def _operand_is_ambiguous(arg: str) -> bool:
+    """True if a raw operand cannot be resolved to one concrete path.
+
+    `.`/`..`, globs/braces, and `$`/backtick expansions may address files the
+    Read rules were meant to protect, so they must not feed an implicit allow.
+    """
+    return arg in (".", "..") or any(ch in arg for ch in "*?[$`{},")
+
+
+def read_operand_may_bypass(sources: list[dict], name: str, norm: list[str],
+                            redirects: list[tuple[str, str]]) -> bool:
+    """True if a read-only command's implicit allow could bypass a Read rule.
+
+    Classifies raw (unresolved) input operands: a `.`/`..`/glob/`$VAR` operand,
+    or a pathless recursive search (`rg`/`ag`, or `grep -r` with no path), may
+    read protected files without an addressable path for Read rules to match.
+    Gated on an actual Read deny/ask.
+    """
+    if not _has_read_restrictive_rule(sources):
+        return False
+    _, shorts, longs = OUTPUT_VALUE_FLAGS.get(name, ((), (), ()))
+    args, _ = _extract_all_positional_args(
+        norm[1:], shorts, longs, VALUE_SHORT_FLAGS.get(name, ())
+    )
+    if name in PATTERN_FIRST_COMMANDS and args:
+        args = args[1:]  # pattern/filter/script, not a path
+    for op, target in redirects:
+        if isinstance(target, int) or op in NON_PATH_REDIRECT_OPS:
+            continue
+        if op in WRITE_REDIRECT_OPS or op == ">&":
+            continue
+        if op in (">&", "<&") and (target.isdigit() or target == "-"):
+            continue
+        args.append(unquote_word(target))  # input redirect target is an operand too
+    if any(_operand_is_ambiguous(a) for a in args):
+        return True
+    return _is_recursive_search(name, norm) and not args
 
 
 def _git_paths_tracked(project_dir: str, paths: list[str]) -> bool:
@@ -2152,8 +2417,10 @@ def evaluate_project_file_op(
         after = norm[2:]
     else:
         return None
-    equals, shorts, longs = OUTPUT_VALUE_FLAGS.get(name, ((), (), ()))
-    args, output_idx = _extract_all_positional_args(after, equals, shorts, longs)
+    _, shorts, longs = OUTPUT_VALUE_FLAGS.get(name, ((), (), ()))
+    args, output_idx = _extract_all_positional_args(
+        after, shorts, longs, VALUE_SHORT_FLAGS.get(name, ())
+    )
     if not args:
         return None
     project_root = os.path.abspath(project_dir)
@@ -2332,12 +2599,66 @@ def matches_deny(sources: list[dict], tool_name: str, target: str) -> Optional[s
 # ---------------------------------------------------------------------------
 
 
+# Writing subcommands whose target `_io_paths` cannot recover from operands;
+# the self-protection guard falls back to a raw-command scan for these.
+GIT_WRITE_SUBCOMMANDS = frozenset(
+    {
+        "checkout", "restore", "rm", "mv", "apply", "reset", "stash",
+        "clean", "switch", "commit", "merge", "rebase", "pull",
+        "am", "cherry-pick", "revert", "filter-branch", "checkout-index",
+    }
+)
+# Reference writers `_io_paths` does not model (the target is not a plain
+# output operand): touch/patch/dd/chmod/chown/chgrp, tar/cpio/zip/openssl/gpg,
+# plus perl -i.
+REFERENCE_WRITER_COMMANDS = frozenset(
+    {
+        "touch", "patch", "dd", "chmod", "chown", "chgrp", "perl",
+        "tar", "cpio", "zip", "openssl", "gpg",
+    }
+)
+
+
+def _is_reference_writer(name: str, norm: list[str]) -> bool:
+    """True if `name` writes via a reference `_io_paths` cannot classify."""
+    if name == "git":
+        return any(unquote_word(w) in GIT_WRITE_SUBCOMMANDS for w in norm[1:])
+    if name == "perl":
+        return any(
+            "i" in w[1:]
+            for w in (unquote_word(x) for x in norm[1:])
+            if w.startswith("-") and not w.startswith("--")
+        )
+    return name in REFERENCE_WRITER_COMMANDS
+
+
 def edits_protected_file(tool_name: str, target: Optional[str]) -> bool:
-    if tool_name not in MUTATING_FILE_TOOLS and tool_name != "Bash":
+    if tool_name not in MUTATING_FILE_TOOLS:
         return False
     if not target:
         return False
     return PROTECTED_FILE_RE.search(target) is not None
+
+
+def bash_edits_protected_file(
+    name: str, norm: list[str], redirects: list[tuple[str, str]]
+) -> bool:
+    """True if a Bash command *writes* to a protected policy/hook file.
+
+    The self-protection guard keys on the paths the command writes (output
+    operands + write-redirect targets), not on the raw command text — a read-only
+    `git diff -- .claude/permissions.json` or `grep … .claude/settings.local.json`
+    must stay allow-listed rather than being flagged because the file name merely
+    appears in the command. Reference writers whose target is not an output
+    operand (`git checkout -- …`, `touch`, `patch`, `perl -i`, …) are the
+    exception: there is no modeled path, so the raw command is scanned.
+    """
+    _, outputs = _io_paths(name, norm, redirects)
+    if any(PROTECTED_FILE_RE.search(p) is not None for p in outputs):
+        return True
+    if _is_reference_writer(name, norm):
+        return PROTECTED_FILE_RE.search(" ".join(norm)) is not None
+    return False
 
 
 def get_match_target(tool_name: str, tool_input: dict) -> Optional[str]:
@@ -2634,7 +2955,7 @@ def evaluate_command(
     if tool_name == "Bash" and cmd_name == "sed" and is_safe_sed_stdin_only(norm):
         if unsafe_construct(words, redirects, sources):
             return Decision("ask", None, [match])
-        if edits_protected_file(tool_name, match):
+        if bash_edits_protected_file(cmd_name, norm, redirects):
             return Decision("ask", None, [match])
         return Decision("allow")
 
@@ -2693,6 +3014,18 @@ def evaluate_command(
         decision = Decision("allow")
     if decision is None and tool_name == "Bash" and cmd_name in {"awk", "gawk", "mawk", "nawk"} and is_safe_awk(norm):
         decision = Decision("allow")
+    if (
+        decision is None
+        and tool_name == "Bash"
+        and cmd_name in READ_ONLY_COMMANDS
+        and not _has_unsafe_read_flag(cmd_name, norm)
+        and not _has_unsafe_pager_env(cmd_name, words)
+    ):
+        # An ambiguous/pathless read may bypass a Read deny: ask instead.
+        if read_operand_may_bypass(sources, cmd_name, norm, redirects):
+            decision = Decision("ask")
+        else:
+            decision = Decision("allow")
     if decision is None and tool_name == "Bash":
         project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
         if project_dir:
@@ -2707,7 +3040,7 @@ def evaluate_command(
                 pr = check_io_path_rules(sources, cmd_name, norm, redirects)
                 if pr is not None:
                     return Decision(pr.decision, pr.pattern, [match])
-        if decision.decision == "allow" and edits_protected_file(tool_name, match):
+        if decision.decision == "allow" and bash_edits_protected_file(cmd_name, norm, redirects):
             return Decision("ask", None, [match])
         return Decision(decision.decision, decision.pattern, [match])
 
@@ -2720,7 +3053,7 @@ def evaluate_command(
         )
         decision = Decision("ask" if (tool_name == "Bash" or restricted) else "allow")
 
-    if decision.decision == "allow" and edits_protected_file(tool_name, match):
+    if decision.decision == "allow" and bash_edits_protected_file(cmd_name, norm, redirects):
         return Decision("ask", None, [match])
     return Decision(decision.decision, decision.pattern, [match])
 

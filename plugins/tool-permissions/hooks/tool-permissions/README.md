@@ -3,10 +3,10 @@
 Claude Code `PreToolUse` hook that enforces a regex-based allow/deny/ask policy
 instead of Claude's built-in glob allow-list.
 
-Implemented in Python 3.13. Bash parsing is delegated to
-[rable](https://pypi.org/project/rable/) 0.2.1 — a Rust reimplementation of the
-Parable bash parser, bash-5.3-compatible — and the hook walks rable's
-s-expression AST instead of hand-rolled shell splitting.
+Implemented in Python 3.13+ (requires-python `>=3.13`). Bash parsing is
+delegated to [rable](https://pypi.org/project/rable/) 0.2.1 — a Rust
+reimplementation of the Parable bash parser, bash-5.3-compatible — and the
+hook walks rable's s-expression AST instead of hand-rolled shell splitting.
 
 Policy file: `$CLAUDE_CONFIG_DIR/permissions.json` (schema:
 `permissions.schema.json`), optionally layered with per-project files (see
@@ -74,10 +74,19 @@ already covered.
 Without this a project `permissions.local.json` could allow-list edits to itself
 (or to the script/registration) and an agent could quietly strip its own rules —
 or disable the hook entirely. It fires for the mutating file tools
-(`Edit`/`Write`/`MultiEdit`/`NotebookEdit`) by target path, and for any `Bash`
-command that references one of these paths (covering redirections, `sed -i`,
-`tee`, `cp`/`mv`, and relative paths the path-arg extractor wouldn't catch).
-Reading a protected file is **not** blocked. The repo source-of-truth copies
+(`Edit`/`Write`/`MultiEdit`/`NotebookEdit`) by target path, and for `Bash`
+commands that write to one of these paths: classified output operands
+(`sed -i`, `tee`, `cp`/`mv` destinations, `sort -o`) and write-redirect
+targets. Writer commands the operand classifier does not model are caught by
+a raw reference scan — `git` with a writing subcommand (`checkout`,
+`restore`, `rm`, `mv`, `apply`, `reset`, `stash`, `clean`, `switch`,
+`commit`, `merge`, `rebase`, `pull`, `am`, `cherry-pick`, `revert`,
+`filter-branch`, `checkout-index`), `touch`, `patch`, `dd`, `chmod`,
+`chown`, `chgrp`, `tar`, `cpio`, `zip`, `openssl`, `gpg`, and `perl -i`.
+A read-only mention
+(`git diff -- .claude/permissions.json`, `grep … .claude/settings.local.json`)
+stays allowed; reading a protected file is **not** blocked. The repo
+source-of-truth copies
 (under `agent-templates/…`, **not** `.claude/`) are intentionally not matched —
 those are meant to be edited; only the deployed runtime copies are guarded.
 
@@ -389,6 +398,36 @@ path-argument guards still run on the allow, so `read x < ~/.ssh/id_rsa` is
 still **denied** by the Read rule. Deliberately **excluded** (they execute code,
 read named files, or send signals, so they stay fail-closed to _ask_): `eval`,
 `source`/`.`, `exec`, `command`, `builtin`, `time`, `trap`, `enable`, `kill`.
+
+### Read-only command auto-allow
+
+Read-only text/file accessors are implicitly **allowed** to read by default,
+mirroring the `Read` file tool, with no explicit `Bash` allow-list entry needed:
+`cat`, `bat`, `batcat`, `less`, `more`, `zcat`/`bzcat`/`xzcat`/`zstdcat`/`lzcat`,
+`head`, `tail`, `xxd`, `od`, `strings`, `grep`/`egrep`/`fgrep`, `rg`, `ag`,
+`cut`, `paste`, `sort`, `fmt`, `fold`, `rev`, `tac`, `nl`, `comm`, `join`,
+`uniq`, `wc`, `column`, `cmp`, `diff`, `colordiff`, `delta`, `difft`, `jq`,
+`xq`, `yq`, `file`, `stat`, and the `*sum` hashers. For `xxd` and `uniq`, a
+lone operand is a read; with two positionals the second is written (governed
+by the mutating rules) and the first is read. The allow is **flag-gated**:
+a flag that turns the command into a writer or executor cancels it and
+falls through to _ask_ — `less -o`/`-O`/`--log-file`,
+`--pager`/`--paging` on `less`/`more`/`bat`/`batcat`/`delta`,
+`rg --pre`/`--pre-glob`, `sort -o`/`--output`/`--compress-program`/
+`--files0-from`, `yq -i`/`--inplace`/`--in-place`, and `xq -i`/`--in-place`.
+A pager-hook env assignment (`LESSOPEN`, `LESSCLOSE`, `BAT_PAGER`,
+`DELTA_PAGER`, `PAGER`) on a viewer also cancels the allow.
+Bundled short clusters (`sort -no`), GNU long-option abbreviations
+(`sort --out=`), and a `--` consumed as the preceding option's value
+(`rg -e -- --pre CMD`) are all caught. The usual guards still run on the
+allow: input operands go through the `Read` rules (`grep x ~/.ssh/id_rsa` is
+**denied**), while output operands (`sort -o`/`--output` values, `xxd`/
+`uniq`'s second operand) and write-redirect targets are governed by the
+mutating (`Edit`/`Write`) rules. An ambiguous read operand — `.`, `..`, a
+glob, a brace expansion `{a,b}`, or a `$VAR`/backtick expansion — and a
+pathless recursive search (`rg`/`ag`, or `grep`/`egrep`/`fgrep` with
+`-r`/`-R`) fall back to _ask_ whenever any `Read` deny/ask rule exists, since
+the actual file set can't be matched by Read rules.
 
 ## Structural allow guard
 
