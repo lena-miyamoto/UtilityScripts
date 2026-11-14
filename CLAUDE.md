@@ -24,6 +24,7 @@ it, never edit the deployed copy under `$CLAUDE_CONFIG_DIR`.
 - Re-read current script before every edit, trust file state not memory, validate immediately after each change.
 - Preserve existing CLI shape unless user explicitly asks to redesign: flags, env vars, prompts, exit behavior, default side effects are part of the interface.
 - Prefer focused validation — `bash -n`, `shellcheck` if available, narrow `--help`/dry-run check — over broad install-script execution.
+- Canonical test command after editing any `*.py` file: `.claude/scripts/bwrap-pytest.sh` (root) or `.claude/scripts/bwrap-pytest.sh -C <project-dir>` (plugin project), but only when `bwrap` is on PATH (`command -v bwrap`). Execute the script directly — it has a working shebang; never call it through `sh`, `bash`, `uv run`, or any other program. Without `bwrap`, fall back to `uv run test` (root) or `uv run pytest` from the plugin dir. When the wrapper is available, never run bare `pytest` — it bypasses the read-only, network-isolated sandbox.
 - Do not run destructive scripts or commands without explicit user intent.
 - Shell scripts: keep current style and existing helper abstractions; don't inline one-off logic.
 - German prose or user-facing text: standard German orthography with umlauts and `ß` unless user explicitly asks for ASCII.

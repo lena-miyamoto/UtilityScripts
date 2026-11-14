@@ -1,6 +1,24 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
+    "allow": [
+      "Bash(.claude/scripts/bwrap-pytest.sh)",
+      "Bash(.claude/scripts/bwrap-pytest.sh *)",
+      "Bash(uv run test)",
+      "Bash(uv run test *)",
+      "Bash(uv run rumdl check)",
+      "Bash(uv run rumdl check *)",
+      "Skill(write-unit-test)"
+    ],
+    "ask": [
+      "Bash(uv run pytest)",
+      "Bash(uv run pytest *)",
+      "Bash(pytest)",
+      "Bash(pytest *)",
+      "Bash(python -m pytest*)",
+      "Bash(python3 -m pytest*)",
+      "Bash(uv run --project * pytest*)"
+    ],
     "deny": [
       "Edit(./**/*.csv)",
       "Write(./**/*.csv)",

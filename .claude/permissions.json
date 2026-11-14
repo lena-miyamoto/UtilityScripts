@@ -1,15 +1,33 @@
 {
   "$schema": "~/.claude/plugins/tool-permissions/hooks/tool-permissions/permissions.schema.json",
   "version": 1,
-  "deny": {
-    "Write|Edit|MultiEdit|NotebookEdit": [
-      "^{project-dir}/.*\\.csv$",
-      "^{project-dir}/.*\\.svg$"
+  "allow": {
+    "Bash": [
+      "^uv run ruff check\\s",
+      "^uv run rumdl check(\\s|$)",
+      "^uv lock --check$",
+      "^\\.claude/scripts/bwrap-pytest\\.sh(\\s|$)",
+      "^uv run test(\\s|$)"
     ],
+    "Skill": [
+      "^write-unit-test$"
+    ]
+  },
+  "deny": {
+    "Write|Edit|MultiEdit|NotebookEdit": ["^{project-dir}/.*\\.csv$", "^{project-dir}/.*\\.svg$"],
     "Read|Write|Edit|MultiEdit|NotebookEdit": [
       "^{project-dir}/(?:.*/)?\\.env[^/]*$",
       "^{project-dir}/(?:.*/)?__pycache__(/|$)",
       "^{project-dir}/(?:.*/)?node_modules(/|$)"
+    ]
+  },
+  "ask": {
+    "Bash": [
+      "^uv run pytest(\\s|$)",
+      "^pytest(\\s|$)",
+      "^python -m pytest(\\s|$)",
+      "^python3 -m pytest(\\s|$)",
+      "^uv run --project .* pytest(\\s|$)"
     ]
   }
 }
