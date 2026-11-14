@@ -354,6 +354,7 @@ function reconfigureVsCode() {
   code --install-extension yzhang.markdown-all-in-one
   code --install-extension ms-vsliveshare.vsliveshare
   code --install-extension vscode-icons-team.vscode-icons
+  code --install-extension mechatroner.rainbow-csv
 
   if [[ "${UBUNTU_SETUP_LENAS_SETUP:-}" == "1" ]] || [[ "${UBUNTU_SETUP_RECONFIGURE_LENAS_VSCODE:-}" == "1" ]]; then
     echo "Installing Lena's VSCode extensions <3..."
@@ -577,15 +578,34 @@ function installCustomFonts() {
   fi
 }
 
-function installFirefoxEsr() {
-  if ! command -v firefox-esr &>/dev/null; then
-    echo "[UBUNTU SETUP] Installing Firefox ESR..."
-    # from this guide: https://linuxconfig.org/how-to-install-firefox-without-snap-on-ubuntu-26-04
+function installFirefoxFromDeb() {
+  if snap list firefox &>/dev/null; then
+    echo "[UBUNTU SETUP] Installing Firefox..."
+    # from this guide: https://support.mozilla.org/en-US/kb/install-firefox-linux#w_install-firefox-deb-package-for-debian-based-and-ubuntu-based-distributions-recommended
+    wget -q https://packages.mozilla.org/apt/repo-signing-key.gpg -O- | sudo tee /etc/apt/keyrings/packages.mozilla.org.asc >/dev/null
+    sudo tee /etc/apt/sources.list.d/mozilla.sources >/dev/null <<EOF
+Types: deb
+URIs: https://packages.mozilla.org/apt
+Suites: mozilla
+Components: main
+Architectures: amd64
+Signed-By: /etc/apt/keyrings/packages.mozilla.org.asc
+EOF
+    sudo tee /etc/apt/preferences.d/mozilla >/dev/null <<EOF
+Package: *
+Pin: origin packages.mozilla.org
+Pin-Priority: 1000
+
+Package: firefox
+Pin: release o=Ubuntu
+Pin-Priority: -1
+EOF
+
+    sudo apt update
     sudo snap remove --purge firefox
-    sudo add-apt-repository -y ppa:mozillateam/ppa
-    sudo apt install -y fonts-lyx firefox-esr
+    sudo apt install -y --allow-downgrades firefox
   else
-    echo "[UBUNTU SETUP] Firefox ESR is already installed. Nothing to do."
+    echo "[UBUNTU SETUP] Firefox is already installed. Nothing to do."
   fi
 }
 
@@ -750,6 +770,15 @@ function installProtonUp() {
   installFlathubPackage net.davidotek.pupgui2 "ProtonUp-Qt"
 }
 
+function installProtontricks() {
+  if ! command -v yad &>/dev/null; then
+    sudo apt install -y yad
+  fi
+  if ! command -v protontricks &>/dev/null; then
+    sudo apt install -y protontricks
+  fi
+}
+
 function installMupen64Plus() {
   installFlathubPackage net.sourceforge.m64py.M64Py "Mupen64Plus + M64Py"
 }
@@ -840,6 +869,7 @@ Signed-By: /usr/share/keyrings/steam.gpg" | sudo tee /etc/apt/sources.list.d/ste
     fi
 
     installProtonUp
+    installProtontricks
   else
     echo "[UBUNTU SETUP] Steam is already installed. Nothing to do."
   fi
@@ -1513,7 +1543,7 @@ function startUbuntuSetup() {
   # install snap packages
   installDiscord
   installSpotify
-  installFirefoxEsr
+  installFirefoxFromDeb
   installThunderbird
 
   # install flatpak packages
