@@ -25,7 +25,7 @@ claude plugin marketplace add lena-miyamoto/UtilityScripts
 claude plugin install statusline@lena-miyamoto
 ```
 
-Requires Python 3.13+ and `uv`; on first run `uv` provisions the virtualenv
+Requires Python 3.12+ and `uv`; on first run `uv` provisions the virtualenv
 automatically (no runtime dependencies).
 
 ## Wiring

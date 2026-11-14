@@ -131,4 +131,4 @@ works. To block every update path, use `DISABLE_UPDATES` instead — but set it
 - `pyproject.toml` — uv project; no runtime deps, `pytest` dev dependency;
   exposes the `statusline` and `subagent-statusline` console scripts.
 - `uv.lock` — committed lockfile.
-- `.python-version` — `3.13`.
+- `.python-version` — `3.12`.
