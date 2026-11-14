@@ -9,10 +9,8 @@ description: >
              before merging the reports. Produces a structured findings report with a verdict, a
              change summary, and a proposed commit subject; returns a fix plan to the caller and
              hands off to `dev-utils:apply-fixes` when issues warrant it.
-model: sonnet
+model: opus
 effort: high
-context: fork
-background: false
 ---
 
 # Review Changeset
@@ -146,10 +144,11 @@ concurrently; wait for every one to return.
 - `subagent_type: general-purpose`.
 - `model: haiku`, `effort: high` — fixed for every area. Never raise or lower them per area, never
   omit them: an agent left on defaults does not match this skill's fan-out settings. The coordinator
-  keeps this file's `sonnet` frontmatter model; that setting does not carry over to the area agents.
-- The `haiku` choice is a deliberate cost trade-off below the Selection Guide's `opus` row, not a
-  capability claim: on the default DeepSeek wiring the step down is a no-op (`haiku` and `sonnet`
-  both resolve to `deepseek-flash`), while on Anthropic it is the weakest tier. Up to 6 haiku agents
+  keeps this file's `opus` frontmatter model; that setting does not carry over to the area agents.
+- The `haiku` choice is a deliberate cost step below the Selection Guide's `opus` row and below the
+  `opus` coordinator, not a capability claim: on the default DeepSeek wiring `haiku`/`sonnet`
+  resolve to `deepseek-flash` while `opus`/`fable` resolve to `deepseek-v4-pro`, so area agents run
+  cheaper than the coordinator; on Anthropic `haiku` is the weakest tier. Up to 6 haiku agents
   run at once per review, buying breadth cheaply. Step 5's boundary-pair and coverage audit pass
   exists to catch what the cheaper per-area read misses — the coordinator re-checks those
   comparisons itself.
@@ -353,9 +352,11 @@ false positives. For every changed `.py` file:
 
 1. Read the diff hunk **and** the full current file. The hunk alone hides the contract it sits in.
 2. If the file belongs to a uv project (a `pyproject.toml` that covers it — see Repo shape in the
-   rulebook), run that project's tests: `uv run --project <project-dir> pytest`. If the project
-   configures a linter, run it read-only. Scripts outside a covering project are standalone: no
-   project tests, but `uv run ruff check <file>` is available read-only.
+   rulebook), run that project's tests through the repo wrapper: `.claude/scripts/bwrap-pytest.sh -C
+   <project-dir>` when `bwrap` is on PATH (`command -v bwrap`), else `uv run --project <project-dir>
+   pytest`; execute the wrapper directly. If the project configures a linter, run it read-only.
+   Scripts outside a covering project are standalone: no project tests, but `uv run ruff check
+   <file>` is available read-only.
 3. Report each lint violation verbatim with its rule ID, and each failing test with its output. A
    Python finding cites real tool output or a rulebook section — never a guess, never a remembered
    rule.
@@ -435,9 +436,9 @@ No Errors or Warnings → state that and stop — no plan, no handoff.
   `${CLAUDE_PLUGIN_ROOT}` files are the only exception.
 - Never edit, move, or delete a reviewed file. Beyond step 1 git scope checks, the diff reads steps 6
   and 11 require, and step 8 `test -f` checks, this skill runs only these read-only checks:
-  `bash -n`, `shellcheck`, `uv run --project <dir> pytest`, and a project's configured linter. Never
-  `--fix`, never a formatter, never any fix-up script — text-only is what lets this skill run
-  backgrounded.
+  `bash -n`, `shellcheck`, `.claude/scripts/bwrap-pytest.sh -C <dir>` (or `uv run --project <dir>
+  pytest` when `bwrap` is absent), and a project's configured linter. Never `--fix`, never a
+  formatter, never any fix-up script — text-only keeps the review side-effect-free.
 - Never apply fixes. Skill stops at the handoff — `dev-utils:apply-fixes` owns approved fixes.
 - Never reproduce a confidential value. Report `file:line` and type only.
 - Never dispatch more than 6 area agents, never dispatch them one at a time, and never narrow a brief

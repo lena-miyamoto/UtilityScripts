@@ -57,8 +57,7 @@ the subtree is.
    so they run concurrently, and wait for every one to return.
    - `subagent_type: general-purpose`.
    - `model` and `effort` at this file's frontmatter values, unchanged for every area. Never raise or
-     lower them per area, never omit them. They match `review-changeset`'s coordinator settings, and
-     `effort: high` carries the reasoning load.
+     lower them per area, never omit them. `effort: high` carries the reasoning load.
    - One call per area, never more than 6. Areas are disjoint — no file appears in two briefs.
    - Agent failed or returned an area incomplete → apply that area's items inline yourself and name
      the failure in the report.
@@ -102,9 +101,11 @@ the subtree is.
      it did not.
    - `*.sh` and shebang scripts → run `bash -n <path>`; run `shellcheck <path>` when
      `command -v shellcheck` succeeds.
-   - `*.py` in a uv project → run `uv run --project <project-dir> pytest`; run the project's
-     configured linter read-only. Root scripts have no project tests but the repo-wide
-     `[tool.ruff]` applies: `uv run ruff check <file>` read-only; re-read the edited region.
+   - `*.py` in a uv project → run the repo wrapper `.claude/scripts/bwrap-pytest.sh -C <project-dir>`
+     when `bwrap` is on PATH (`command -v bwrap`), else `uv run --project <project-dir> pytest`, in
+     the read-only sandbox; execute the wrapper directly. Run the project's configured linter
+     read-only. Root scripts have no project tests but the repo-wide `[tool.ruff]` applies: `uv run
+     ruff check <file>` read-only; re-read the edited region.
    - Plugin manifests → re-check every version field the plugin carries matches.
 8. Staging: edits to files the review scope already staged leave the index stale. When the scope was
    staged, report every file where index and worktree differ (`MM` in `git status --short`) and the
