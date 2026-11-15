@@ -691,7 +691,7 @@ def test_compound_redirect_write():
     s = src(allow={"Bash": [r"^echo(\s|$)"]})
     assert ev("{ echo hi; } > ~/.bashrc", s).decision == "ask"
     # …and a safe-prefix target still reaches the mutating deny rules.
-    s2 = src(allow={"Bash": [r"^echo(\s|$)"]}, deny={"Write": ["^/tmp/secret$"]})
+    s2 = src(allow={"Bash": [r"^echo(\s|$)"]}, deny={"Edit": ["^/tmp/secret$"]})
     assert ev("{ echo hi; } > /tmp/secret", s2).decision == "deny"
 
 
@@ -1352,7 +1352,7 @@ def test_project_file_op_outside_mutation_allowlisted(monkeypatch):
     # A Bash file op against a target mutation-allow-listed outside the project
     # (the global `^/tmp/` allow) is auto-allowed instead of asking.
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", PROJ)
-    s = src(allow={"Write": ["^/tmp/"]})
+    s = src(allow={"Edit": ["^/tmp/"]})
     assert main.evaluate_project_file_op(["cp", "/tmp/a", "/tmp/b"], [s], PROJ).decision == "allow"
     assert main.evaluate_project_file_op(["mv", "/tmp/a", "/tmp/b"], [s], PROJ).decision == "allow"
     assert main.evaluate_project_file_op(["rm", "/tmp/x"], [s], PROJ).decision == "allow"
@@ -1363,7 +1363,7 @@ def test_project_file_op_outside_mutation_allowlisted(monkeypatch):
 
 def test_cp_tmp_allowlisted_end_to_end(monkeypatch):
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", PROJ)
-    s = src(allow={"Write": ["^/tmp/"]})
+    s = src(allow={"Edit": ["^/tmp/"]})
     assert ev("cp /tmp/orig.md /tmp/copy.md", s).decision == "allow"
 
 
@@ -1371,7 +1371,7 @@ def test_project_file_op_sensitive_dir_allowlisted(monkeypatch):
     # A `.claude`/`.git` path is normally un-vettable in bulk and asks, but a
     # specific path mutation-allow-listed (e.g. `.claude/**/*.md`) is trusted.
     monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: False)
-    s = src(allow={"Write": [r"^/work/\.claude/.*\.md$"]})
+    s = src(allow={"Edit": [r"^/work/\.claude/.*\.md$"]})
     assert main.evaluate_project_file_op(["rm", "/work/.claude/foo.md"], [s], "/work").decision == "allow"
     # The allow-listed destination is trusted, but an untracked non-allow-listed
     # source still gates the copy.
@@ -1385,7 +1385,7 @@ def test_project_file_op_sensitive_dir_allowlisted(monkeypatch):
 def test_project_file_op_tee_allowlisted_end_to_end(monkeypatch):
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work")
     monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: False)
-    s = src(allow={"Write": [r"^/work/\.claude/.*\.md$"]})
+    s = src(allow={"Edit": [r"^/work/\.claude/.*\.md$"]})
     assert ev("tee .claude/foo.md < /tmp/a.md", s).decision == "allow"
     assert ev("tee .claude/foo.txt < /tmp/a.md", s).decision == "ask"
     assert ev("tee -a .claude/notes/x.md < /tmp/a.md", s).decision == "allow"
@@ -1394,7 +1394,7 @@ def test_project_file_op_tee_allowlisted_end_to_end(monkeypatch):
 def test_redirect_to_mutation_allowlisted_target(monkeypatch):
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
     s = src(
-        allow={"Bash": [r"^echo(\s|$)"], "Write": [r"^/work/\.claude/.*\.md$"]},
+        allow={"Bash": [r"^echo(\s|$)"], "Edit": [r"^/work/\.claude/.*\.md$"]},
     )
     assert ev("echo hi > /work/.claude/foo.md", s).decision == "allow"
     assert ev("echo hi >> /work/.claude/notes/foo.md", s).decision == "allow"
@@ -1408,9 +1408,9 @@ def test_redirect_to_mutation_allowlisted_target(monkeypatch):
 def test_redirect_allowlisted_target_deny_blocks_allow(monkeypatch):
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
     global_allow = src(
-        allow={"Bash": [r"^echo(\s|$)"], "Write": [r"^/work/\.claude/.*\.md$"]}
+        allow={"Bash": [r"^echo(\s|$)"], "Edit": [r"^/work/\.claude/.*\.md$"]}
     )
-    project_deny = src(deny={"Write": [r"^/work/\.claude/secret\.md$"]})
+    project_deny = src(deny={"Edit": [r"^/work/\.claude/secret\.md$"]})
     # A higher-priority deny on the target blocks the auto-allow; the redirect
     # targets a non-safe path, so it fails closed to ask rather than deny.
     assert ev("echo hi > /work/.claude/secret.md", project_deny, global_allow).decision == "ask"
@@ -1423,12 +1423,11 @@ def test_project_file_op_untracked_asks(monkeypatch):
 
 def test_project_file_op_mutating_allowlist_carves_out_untracked(monkeypatch):
     monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: False)
-    for tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
-        s = src(allow={tool: [f"^{re.escape(PROJ)}/foo$"]})
-        assert (
-            main.evaluate_project_file_op(["rm", PROJ + "/foo"], [s], PROJ).decision
-            == "allow"
-        ), tool
+    s = src(allow={"Edit": [f"^{re.escape(PROJ)}/foo$"]})
+    assert (
+        main.evaluate_project_file_op(["rm", PROJ + "/foo"], [s], PROJ).decision
+        == "allow"
+    )
 
 
 def test_project_file_op_read_allowlist_does_not_carve_out(monkeypatch):
@@ -1448,12 +1447,25 @@ def test_project_file_op_allowlist_does_not_cover_other_path(monkeypatch):
 
 def test_project_file_op_deny_beats_allowlist(monkeypatch):
     monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: False)
-    s = src(
-        allow={"Edit": [f"^{re.escape(PROJ)}/foo$"]},
-        deny={"Write": [f"^{re.escape(PROJ)}/foo$"]},
+    path = f"^{re.escape(PROJ)}/foo$"
+    deny_src = src(deny={"Edit": [path]})
+    allow_src = src(allow={"Edit": [path]})
+    # A mutating allowlist alone exempts `rm`, so this call consults `allow_src`
+    # (remove it from the list and the result drops to ask, failing here).
+    assert (
+        main.evaluate_project_file_op(["rm", PROJ + "/foo"], [allow_src], PROJ).decision
+        == "allow"
     )
-    # rm deletes `foo`, so a mutating (Write) deny beats the Edit allowlist.
-    assert main.evaluate_project_file_op(["rm", PROJ + "/foo"], [s], PROJ).decision == "deny"
+    # Same source: allow outranks deny, so the collapsed allow wins.
+    s = src(allow={"Edit": [path]}, deny={"Edit": [path]})
+    assert (
+        main.evaluate_project_file_op(["rm", PROJ + "/foo"], [s], PROJ).decision == "allow"
+    )
+    # rm deletes `foo`; the higher-priority mutating deny beats the allowlist.
+    assert (
+        main.evaluate_project_file_op(["rm", PROJ + "/foo"], [deny_src, allow_src], PROJ).decision
+        == "deny"
+    )
 
 
 def test_project_file_op_root_delete_denied(monkeypatch):
@@ -1619,7 +1631,7 @@ def test_io_path_file_url_output_checked(monkeypatch):
     # A `file://` destination is a write to a local path: it must hit mutating
     # rules, not be skipped as a URL.
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
-    s = src(allow={"Bash": ["^wget"]}, deny={"Write": ["^/etc/shadow$"]})
+    s = src(allow={"Bash": ["^wget"]}, deny={"Edit": ["^/etc/shadow$"]})
     assert ev("wget -O file:///etc/shadow https://example.com", s).decision == "deny"
 
 
@@ -2024,9 +2036,12 @@ def test_source_higher_wins():
 
 
 def test_expand_grouped_keys():
-    assert main.expand_grouped_keys({"Read|Edit|Write": ["p"]}) == {
-        "Read": ["p"], "Edit": ["p"], "Write": ["p"],
+    # Deprecated mutating aliases collapse into `Edit`.
+    assert main.expand_grouped_keys({"Read|Write": ["p"]}) == {
+        "Read": ["p"], "Edit": ["p"],
     }
+    assert main.expand_grouped_keys({"MultiEdit": ["p"]}) == {"Edit": ["p"]}
+    assert main.expand_grouped_keys({"NotebookEdit": ["p"]}) == {"Edit": ["p"]}
 
 
 def test_expand_tilde_bucket():
@@ -2148,7 +2163,7 @@ def test_web_fetch_output_read_deny_noop():
 
 
 def test_web_fetch_output_mutating_deny():
-    # wget/curl output paths are governed by mutating (Edit/Write) rules.
+    # wget/curl output paths are governed by mutating (Edit) rules.
     s = src(allow={"WebFetch": [ANTHROPIC]}, deny={"Edit": [f"^{HOME_RE}/\\.ssh/.*$"]})
     assert ev("wget -O ~/.ssh/id_rsa https://anthropic.com", s).decision == "deny"
     assert ev("curl -o ~/.ssh/id_rsa https://anthropic.com", s).decision == "deny"
@@ -2202,7 +2217,7 @@ def test_default_file_allow_config_dir_plans_write(monkeypatch):
     # Mutating tools may write `*.md` files under {config}/plans/.
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-    for tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+    for tool in ("Write", "Edit", "NotebookEdit"):
         assert main._eval_non_bash([], tool, HOME + "/.claude/plans/plan.md").decision == "allow", tool
         assert main._eval_non_bash([], tool, HOME + "/.claude/plans/sub/foo.md").decision == "allow", tool
 
@@ -2212,7 +2227,7 @@ def test_default_file_allow_config_dir_write_asks(monkeypatch):
     # still fall through to ask.
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-    for tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+    for tool in ("Write", "Edit", "NotebookEdit"):
         assert main._eval_non_bash([], tool, HOME + "/.claude/settings.json").decision == "ask", tool
         assert main._eval_non_bash([], tool, HOME + "/.claude/notes.md").decision == "ask", tool
         assert main._eval_non_bash([], tool, HOME + "/.claude/plans/plan.txt").decision == "ask", tool
@@ -2234,7 +2249,7 @@ def test_default_file_allow_project_tracked(monkeypatch):
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work/proj")
     monkeypatch.setattr(os.path, "exists", lambda p: True)
     monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: True)
-    for tool in ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit"):
+    for tool in ("Read", "Edit", "Write", "NotebookEdit"):
         assert main._eval_non_bash([], tool, "/work/proj/src/app.ts").decision == "allow", tool
         assert main._eval_non_bash([], tool, "/work/proj/README.md").decision == "allow", tool
         assert main._eval_non_bash([], tool, "/work/proj/.claude/CLAUDE.md").decision == "allow", tool
@@ -2247,21 +2262,19 @@ def test_default_file_allow_project_untracked_existing(monkeypatch):
     monkeypatch.setattr(os.path, "exists", lambda p: True)
     monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: False)
     assert main._eval_non_bash([], "Read", "/work/proj/src/new.ts").decision == "allow"
-    for tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
+    for tool in ("Edit", "Write", "NotebookEdit"):
         assert main._eval_non_bash([], tool, "/work/proj/src/new.ts").decision == "ask", tool
 
 
 def test_default_file_allow_project_new_file(monkeypatch):
-    # A non-existent file inside the project is a pure create: the creating
-    # tools (Write/NotebookEdit) auto-allow without a version-control gate;
-    # Edit/MultiEdit still fall through to ask.
+    # A non-existent file inside the project is a pure create: `Edit` (and
+    # Write/NotebookEdit, which match as Edit) auto-allows without a
+    # version-control gate.
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work/proj")
     monkeypatch.setattr(os.path, "exists", lambda p: False)
     monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: False)
-    for tool in ("Write", "NotebookEdit"):
+    for tool in ("Edit", "Write", "NotebookEdit"):
         assert main._eval_non_bash([], tool, "/work/proj/src/fresh.ts").decision == "allow", tool
-    for tool in ("Edit", "MultiEdit"):
-        assert main._eval_non_bash([], tool, "/work/proj/src/fresh.ts").decision == "ask", tool
 
 
 def test_default_file_allow_backup_files(monkeypatch):
@@ -2270,7 +2283,7 @@ def test_default_file_allow_backup_files(monkeypatch):
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work/proj")
     monkeypatch.setattr(os.path, "exists", lambda p: True)
     monkeypatch.setattr(main, "_git_paths_tracked", lambda project_dir, paths: False)
-    for tool in ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit"):
+    for tool in ("Read", "Edit", "Write", "NotebookEdit"):
         assert main._eval_non_bash([], tool, "/work/proj/~notes.md").decision == "allow", tool
         assert main._eval_non_bash([], tool, "/work/proj/sub/~my-file.txt").decision == "allow", tool
     # other `~`-prefixed extensions fall through to the git-tracked gate.
@@ -2486,7 +2499,7 @@ def test_template_project_claude_read_allow(capsys, template_sources, in_project
 
 def test_template_project_claude_mutation_allow(capsys, template_sources, in_project):
     # The template's mutation allow is `{project-dir}/.+\.md$` — `.md` only.
-    for tool in ("Write", "Edit", "MultiEdit"):
+    for tool in ("Write", "Edit"):
         for path in (
             ".claude/agents/historian.md",
             ".claude/references/frontmatter-fields.md",
@@ -2496,19 +2509,23 @@ def test_template_project_claude_mutation_allow(capsys, template_sources, in_pro
             ) == "allow", (tool, path)
 
 
-def test_template_project_non_md_uses_default(capsys, template_sources, in_project):
+def test_template_project_non_md_uses_default(
+    capsys, template_sources, in_project, monkeypatch
+):
     # Non-`.md` under the project has no allow rule, so it lands on the hook
-    # default (`_default_file_allow`): `Edit` asks — the fixture stubs the
-    # git-tracked check to False, matching an untracked file — while `Write` of
-    # a path that doesn't exist yet is a pure create and is allowed.
+    # default (`_default_file_allow`): an existing untracked file asks — the
+    # fixture stubs the git-tracked check to False — while `Edit` of a path
+    # that doesn't exist yet is a pure create and is allowed.
+    monkeypatch.setattr(os.path, "exists", lambda p: True)
     for path in (".claude/scripts/utils.py", ".claude/references/x.yaml"):
         assert decide_decision(
             capsys, template_sources, "Edit", {"file_path": f"{PROJ}/{path}"}
         ) == "ask", path
+    monkeypatch.setattr(os.path, "exists", lambda p: False)
     assert decide_decision(
         capsys,
         template_sources,
-        "Write",
+        "Edit",
         {"file_path": f"{PROJ}/.claude/scripts/new-script.py"},
     ) == "allow"
 

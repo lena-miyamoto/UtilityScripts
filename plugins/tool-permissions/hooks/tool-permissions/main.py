@@ -275,11 +275,20 @@ FIRST_INPUT_SECOND_OUTPUT = {"pdftotext", "tesseract", "xxd", "uniq"}
 # resolved to bogus paths like `<cwd>/s/a/b/`.
 SCRIPT_FIRST_COMMANDS = {"sed", "awk", "gawk", "mawk", "nawk"}
 
-MUTATING_FILE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
-FILE_TOOLS = {"Read", "Write", "Edit", "MultiEdit", "NotebookEdit"}
-# File tools that can create a new file. Edit/MultiEdit only modify existing
-# files, so the non-existent-create carve-out applies to these two only.
-CREATING_FILE_TOOLS = ("Write", "NotebookEdit")
+# Claude Code matches file permissions against `Read`/`Edit` rules only, so
+# `Write`/`NotebookEdit` calls are canonicalised to `Edit` before policy lookup
+# (`MultiEdit` no longer exists as a tool).
+FILE_TOOLS = {"Read", "Edit"}
+MUTATING_FILE_TOOLS = ("Edit",)
+# `Edit` creates a file when `old_string` is empty, so the non-existent-create
+# carve-out applies to it too.
+CREATING_FILE_TOOLS = ("Edit",)
+FILE_TOOL_ALIASES = {"Write": "Edit", "MultiEdit": "Edit", "NotebookEdit": "Edit"}
+
+
+def canonical_file_tool(tool_name: str) -> str:
+    """Return the policy key for a file tool (`Edit` for mutating tools)."""
+    return FILE_TOOL_ALIASES.get(tool_name, tool_name)
 
 # Redirect targets that are never treated as write-op escapes.
 SAFE_REDIRECT_PREFIXES = ("/dev/null", "/tmp/")
@@ -2065,7 +2074,7 @@ def read_rule_opinion_for_paths(
 def _mutating_opinion_for_paths(
     sources: list[dict], paths: list[str]
 ) -> Optional[Decision]:
-    """Resolve each path as a mutation (Edit/Write/…); deny > ask > None."""
+    """Resolve each path as an `Edit` mutation; deny > ask > None."""
     return _rule_opinion_for_paths(sources, MUTATING_FILE_TOOLS, paths)
 
 
@@ -2390,7 +2399,7 @@ def _path_allowlisted_for_mutation(sources: list[dict], path: str) -> bool:
 
     The git-tracked gate guards destructive Bash file ops (`rm`/`rmdir`/`mv`/
     `gio trash`, plus `cp`), so the only allow rules that exempt a path are the
-    mutating ones (`Edit`/`Write`/`MultiEdit`/`NotebookEdit`). A `Read` allow
+    mutating ones (`Edit`). A `Read` allow
     authorizes read-only access only — it does not imply permission to delete
     or move the file, so it never carves out the gate.
     """
@@ -2539,11 +2548,15 @@ def expand_placeholders(
 
 
 def expand_grouped_keys(bucket: dict[str, list[str]]) -> dict[str, list[str]]:
-    """Expand `|`-grouped tool keys (`"Bash|Edit"`) into individual keys."""
+    """Expand `|`-grouped tool keys (`"Bash|Edit"`) into individual keys.
+
+    Mutating file-tool aliases (`Write`, `NotebookEdit`, `MultiEdit`) collapse
+    into `Edit`, matching Claude Code's file-permission matching.
+    """
     out: dict[str, list[str]] = {}
     for key, pats in bucket.items():
         for k in key.split("|"):
-            k = k.strip()
+            k = canonical_file_tool(k.strip())
             if k:
                 out.setdefault(k, []).extend(pats)
     return out
@@ -2664,7 +2677,7 @@ def bash_edits_protected_file(
 def get_match_target(tool_name: str, tool_input: dict) -> Optional[str]:
     if tool_name == "Bash":
         return tool_input.get("command")
-    if tool_name in ("Read", "Edit", "MultiEdit", "Write"):
+    if tool_name in ("Read", "Edit", "Write"):
         return tool_input.get("file_path")
     if tool_name == "NotebookEdit":
         return tool_input.get("notebook_path")
@@ -3245,16 +3258,14 @@ def _default_file_allow(tool_name: str, path: Optional[str]) -> bool:
     """Default allow for file tools when no explicit rule matched.
 
     * Inside the global config dir (``$CLAUDE_CONFIG_DIR``, else
-      ``~/.claude``) ``Read`` is allowed for everything; mutating tools
-      (``Write``/``Edit``/``MultiEdit``/``NotebookEdit``) are allowed only for
-      ``*.md`` files under the ``plans/`` subdir, and fall through to ask
-      elsewhere.
-    * Inside the project dir, ``Read`` is allowed for anything; mutating tools
-      (``Write``/``Edit``/``MultiEdit``/``NotebookEdit``) are allowed for
-      git-tracked files and ``~``-prefixed ``*.md``/``*.txt`` backup files
-      (typically untracked). ``Write`` and ``NotebookEdit`` additionally allow
-      a file that doesn't exist yet (a pure create). Anything else in the
-      project falls through to ask.
+      ``~/.claude``) ``Read`` is allowed for everything; ``Edit`` is allowed
+      only for ``*.md`` files under the ``plans/`` subdir, and falls through to
+      ask elsewhere.
+    * Inside the project dir, ``Read`` is allowed for anything; ``Edit`` is
+      allowed for git-tracked files and ``~``-prefixed ``*.md``/``*.txt``
+      backup files (typically untracked). ``Edit`` additionally allows a file
+      that doesn't exist yet (a pure create). Anything else in the project
+      falls through to ask.
     * Everywhere else falls through to ask.
     """
     if not path:
@@ -3288,6 +3299,7 @@ def _default_file_allow(tool_name: str, path: Optional[str]) -> bool:
 
 
 def _eval_non_bash(sources: list[dict], tool_name: str, target: Optional[str]) -> Decision:
+    tool_name = canonical_file_tool(tool_name)
     if tool_name in FILE_TOOLS and target:
         target = _resolve_path(target)
     decision = prioritized_opinion(sources, tool_name, target or "")

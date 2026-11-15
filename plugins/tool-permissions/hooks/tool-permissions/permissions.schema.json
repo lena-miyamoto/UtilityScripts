@@ -20,7 +20,7 @@
   "$defs": {
     "bucket": {
       "type": "object",
-      "description": "Map of tool name (or '|'-joined file-tool group) → array of regex patterns. Empty array [] matches unconditionally. File tools (Read/Write/Edit/MultiEdit/NotebookEdit) may be grouped with '|'; non-file tools (Bash/WebSearch/WebFetch/Skill) must appear alone.",
+      "description": "Map of tool name (or '|'-joined file-tool group) → array of regex patterns. Empty array [] matches unconditionally. File tools (Read/Edit) may be grouped with '|'; non-file tools (Bash/WebSearch/WebFetch/Skill) must appear alone. Deprecated Write/NotebookEdit/MultiEdit keys still load but are treated as Edit, matching Claude Code's file-permission matching.",
       "additionalProperties": { "$ref": "#/$defs/patternList" },
       "propertyNames": {
         "description": "Tool name. Use WebFetch (not Fetch — the hook normalises the UI alias at runtime). File tools may be '|'-joined to share a pattern list; all other tools must appear alone.",
@@ -32,7 +32,7 @@
       "description": "List of ECMAScript regex patterns matched against the tool's input field. Empty list [] matches the tool unconditionally regardless of input.",
       "items": {
         "type": "string",
-        "description": "ECMAScript regex. ~/  expands to $HOME, {project-dir} to $CLAUDE_PROJECT_DIR, and {global-conf-dir} to the global config dir ($CLAUDE_CONFIG_DIR, else ~/.claude) at runtime (in the global file, {project-dir} resolves to whichever project is current). Match target per tool: Bash→command, Read/Edit/MultiEdit/Write→file_path, NotebookEdit→notebook_path, WebSearch→query, WebFetch→url, Skill→skill."
+        "description": "ECMAScript regex. ~/  expands to $HOME, {project-dir} to $CLAUDE_PROJECT_DIR, and {global-conf-dir} to the global config dir ($CLAUDE_CONFIG_DIR, else ~/.claude) at runtime (in the global file, {project-dir} resolves to whichever project is current). Match target per tool: Bash→command, Read/Edit→file_path (Write→file_path and NotebookEdit→notebook_path are matched as Edit), WebSearch→query, WebFetch→url, Skill→skill."
       }
     }
   }

