@@ -1,6 +1,6 @@
 ---
 name: compress-instructions
-description: "Compresses instruction .md files to cut token cost, keeping meaning exact. Accepts a file, directory, glob, or list of these. Rewrites body text in place: short fragments, plain words, technical jargon kept verbatim. Uses only file reads, `Edit`/`Write`, `find`/glob expansion, and `realpath`/`readlink -f` — no scripts. Skips README.md, CONTRIBUTING.md, DEVELOPMENT.md, CHANGELOG.md, and references/*.md unless named directly. Use when explicitly asked to compress instruction files."
+description: "Compresses instruction .md files to cut token cost, keeping meaning exact. Accepts a file, directory, glob, or list of these. Rewrites body text in place: short fragments, plain words, technical jargon kept verbatim. Uses only file reads, `Edit`, `find`/glob expansion, and `realpath`/`readlink -f` — no scripts. Skips README.md, CONTRIBUTING.md, DEVELOPMENT.md, CHANGELOG.md, and references/*.md unless named directly. Use when explicitly asked to compress instruction files."
 argument-hint: 'File, directory, glob, or list of instruction .md files'
 disable-model-invocation: true
 user-invocable: true
@@ -43,14 +43,14 @@ glob expansion stay filtered.
 
 ## Process
 
-Per file, section-by-section — rewrite via `Edit`/`Write`; `Bash` only for `find`/glob expansion and `realpath`/`readlink -f`:
+Per file, section-by-section — rewrite via `Edit`; `Bash` only for `find`/glob expansion and `realpath`/`readlink -f`:
 
 1. Resolve arg into target list (see Input handling).
 2. Scope check per file — resolve symlinks first with `realpath`/`readlink -f`; under `$CLAUDE_CONFIG_DIR` (unset → `~/.claude`) → refuse, no override. Default-skip match → skip unless named directly as a file arg or list entry.
 3. **Read file** (skip if already in context this turn).
 4. **Density check.** Apply criteria below. If file meets all density thresholds, skip it, note which criteria triggered, continue. Never skip on subjective judgement alone.
 5. **Save original.** Step 3 content is reference. Hold in context as baseline for all comparisons.
-6. **Section-by-section rewrite via `Edit`/`Write`:**
+6. **Section-by-section rewrite via `Edit`:**
    a. Identify major heading sections (`##` or `###` delimited blocks), plus any content before the first heading; treat that preamble as a section.
    b. Compress one section at a time, applying rules below.
    c. After each section: self-check against saved original BEFORE next section.
