@@ -6,8 +6,8 @@
       "^{global-conf-dir}/(?!.*settings(\\.local)?\\.json)(?!.*\\.env[^/]*$).*$",
       "^{project-dir}/(?!.*\\.env[^/]*$).*$"
     ],
-    "Write|Edit|MultiEdit|NotebookEdit": ["^{global-conf-dir}/.+\\.md$", "^{project-dir}/.+\\.md$"],
-    "Read|Write|Edit|MultiEdit|NotebookEdit": ["^/tmp/"],
+    "Edit": ["^{global-conf-dir}/.+\\.md$", "^{project-dir}/.+\\.md$"],
+    "Read|Edit": ["^/tmp/"],
     "WebSearch": [],
     "WebFetch": [
       "^https://([a-zA-Z0-9-]+\\.)*anthropic\\.com(:\\d+)?(/|$)",
@@ -104,7 +104,7 @@
     ]
   },
   "deny": {
-    "Read|Write|Edit|MultiEdit|NotebookEdit": [
+    "Read|Edit": [
       "^~/\\.(ssh|aws|gnupg|kube|password-store|terraform\\.d|azure)/.*$",
       "^~/\\.config/(gh|op|gcloud|aws|doctl)/.*$",
       "^~/\\.config/git/credentials$",

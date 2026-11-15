@@ -21,32 +21,17 @@
     ],
     "deny": [
       "Edit(./**/*.csv)",
-      "Write(./**/*.csv)",
-      "MultiEdit(./**/*.csv)",
-      "NotebookEdit(./**/*.csv)",
 
       "Edit(./**/*.svg)",
-      "Write(./**/*.svg)",
-      "MultiEdit(./**/*.svg)",
-      "NotebookEdit(./**/*.svg)",
 
       "Read(./**/.env*)",
       "Edit(./**/.env*)",
-      "Write(./**/.env*)",
-      "MultiEdit(./**/.env*)",
-      "NotebookEdit(./**/.env*)",
 
       "Read(./**/__pycache__/**)",
       "Edit(./**/__pycache__/**)",
-      "Write(./**/__pycache__/**)",
-      "MultiEdit(./**/__pycache__/**)",
-      "NotebookEdit(./**/__pycache__/**)",
 
       "Read(./**/node_modules/**)",
-      "Edit(./**/node_modules/**)",
-      "Write(./**/node_modules/**)",
-      "MultiEdit(./**/node_modules/**)",
-      "NotebookEdit(./**/node_modules/**)"
+      "Edit(./**/node_modules/**)"
     ]
   }
 }

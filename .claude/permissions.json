@@ -14,8 +14,8 @@
     ]
   },
   "deny": {
-    "Write|Edit|MultiEdit|NotebookEdit": ["^{project-dir}/.*\\.csv$", "^{project-dir}/.*\\.svg$"],
-    "Read|Write|Edit|MultiEdit|NotebookEdit": [
+    "Edit": ["^{project-dir}/.*\\.csv$", "^{project-dir}/.*\\.svg$"],
+    "Read|Edit": [
       "^{project-dir}/(?:.*/)?\\.env[^/]*$",
       "^{project-dir}/(?:.*/)?__pycache__(/|$)",
       "^{project-dir}/(?:.*/)?node_modules(/|$)"
