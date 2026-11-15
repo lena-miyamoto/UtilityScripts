@@ -94,7 +94,7 @@ Use `@path/to/import` to pull in external files. Imports chain up to 4 hops deep
 ## Rules: Path-Scoping Is Everything
 
 - **Always scope** rules that apply to specific directories. Unscoped rules cost tokens during every session regardless of what you're working on.
-- Path-scoped rules load when Claude uses Read, Write, or Edit on a matching file.
+- Path-scoped rules load when Claude uses the Read, Write, or Edit tool on a matching file.
 - Once loaded, rules **never scope out** — they stay for the rest of the session.
 - Use `paths:` in YAML frontmatter, not `globs:` (the latter loads unconditionally).
 
