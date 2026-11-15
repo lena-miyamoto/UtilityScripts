@@ -6,12 +6,10 @@
       "^uv run ruff check\\s",
       "^uv run rumdl check(\\s|$)",
       "^uv lock --check$",
-      "^\\.claude/scripts/bwrap-pytest\\.sh(\\s|$)",
+      "^(?:(sh|bash) -n)?\\.claude/scripts/bwrap-pytest\\.sh(\\s|$)",
       "^uv run test(\\s|$)"
     ],
-    "Skill": [
-      "^write-unit-test$"
-    ]
+    "Skill": ["^write-unit-test$"]
   },
   "deny": {
     "Edit": ["^{project-dir}/.*\\.csv$", "^{project-dir}/.*\\.svg$"],
