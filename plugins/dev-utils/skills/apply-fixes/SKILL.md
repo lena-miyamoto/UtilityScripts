@@ -1,10 +1,7 @@
 ---
 name: apply-fixes
 description: >
-             Apply the fixes from a `dev-utils:review-changeset` fix plan. Invoked by the caller after `dev-utils:review-changeset`
-             returns findings that warrant fixes; never invoked directly by the user. Reads the review summary and
-             fix plan from the caller's handoff, applies each approved fix, and splits a larger plan across
-             parallel agents.
+             Apply the fixes from a `dev-utils:review-changeset` fix plan. Invoked by the reviewing assistant through the `Skill` tool after the user approves the plan; receives the review summary, the fix plan, and a `User approval: <option>` line as `args`. Never invoked directly by the user. Applies each approved fix and splits a larger plan across parallel agents.
 argument-hint: 'The review summary and fix plan text returned by dev-utils:review-changeset'
 user-invocable: false
 model: sonnet
@@ -16,8 +13,8 @@ background: false
 # Apply Fixes
 
 Source of truth for the `apply-fixes` skill. Applies fixes from an approved `dev-utils:review-changeset` fix
-plan. Forked and not user-invocable — only the handoff-receiving caller invokes it, after the
-user approves the plan.
+plan. Forked and not user-invocable — the reviewing assistant invokes it with the `Skill` tool
+after the user answers the approval question.
 
 **Repo-scope only.** Never edit, move, or delete anything under `$CLAUDE_CONFIG_DIR` (unset →
 `~/.claude`): global `CLAUDE.md`, `settings.json`, agents, skills, installed plugins, project state.
@@ -28,20 +25,23 @@ the subtree is.
 
 ## When to Use
 
-- Called by the caller immediately after `dev-utils:review-changeset` returns a fix plan (Errors or Warnings).
+- Invoked through the `Skill` tool immediately after `dev-utils:review-changeset` prints a fix plan
+  (Errors or Warnings) and the user answers that skill's approval question.
 - Only after the user has explicitly approved the plan. Never apply fixes on an unapproved plan.
 
 ## Input
 
-- The review summary and fix plan produced by `dev-utils:review-changeset`, passed as `args`.
-- If the handoff text is missing or empty → stop and ask the caller for it.
+- The review summary and fix plan produced by `dev-utils:review-changeset`, passed as `args`, plus
+  a `User approval: <option>` line recording the user's answer.
+- Missing handoff text or missing approval → stop and return to the caller; never treat silence as
+  consent.
 
 ## Procedure
 
 1. Confirm the handoff text carries a review summary and a fix plan. Missing → stop and ask the
    caller.
-2. Confirm the plan was approved by the user. Approval unclear → stop and ask; never apply
-   unprompted.
+2. Confirm the plan was approved by the user — the `User approval: <option>` line in `args` is the
+   only approval channel. Approval unclear → stop and ask; never apply unprompted.
 3. Decide the split before editing:
    - **Inline is the default.** A plan touching at most 2 files, or fitting one cohesive area, runs
      entirely in this fork. Most plans are this size.

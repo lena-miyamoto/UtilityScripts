@@ -7,8 +7,8 @@ description: >
              scope: staged changes if present, otherwise unstaged, splits the changeset into up
              to six independent review areas, and fans out one parallel haiku sub-agent per area
              before merging the reports. Produces a structured findings report with a verdict, a
-             change summary, and a proposed commit subject; returns a fix plan to the caller and
-             hands off to `dev-utils:apply-fixes` when issues warrant it.
+             change summary, and a proposed commit subject; when issues warrant fixes, asks the
+             user to approve the plan and invokes `dev-utils:apply-fixes` in the same session.
 model: opus
 effort: high
 ---
@@ -19,7 +19,8 @@ Diff-driven review of current changeset. Auto-detect scope, partition changed fi
 review areas, fan out one sub-agent per area, merge reports into one. Instruction files:
 inconsistencies, stale references, contradictions causing wrong behavior. Python and shell:
 correctness, repo-contract, modern-idiom violations, using repo's own checks as evidence.
-Fix-worthy findings → fix plan returned to caller as text; caller invokes `dev-utils:apply-fixes`.
+Fix-worthy findings → fix plan as text, an approval question to the user, and a
+`dev-utils:apply-fixes` invocation in the same session once approved.
 
 ## Scope Boundary
 
@@ -402,10 +403,11 @@ checks. For each finding, include:
 No findings → report "No issues found in `N` reviewable files." Include a summary line listing which
 files were reviewed. Stop here — no handoff needed.
 
-### 17. Hand Off the Fix Plan (When Findings Warrant It)
+### 17. Get Approval and Invoke Apply-Fixes (When Findings Warrant It)
 
-If the report contains any **Error** or **Warning** findings, append the fix plan to your final
-message as text — do **not** write a file. The plan must:
+If the report contains any **Error** or **Warning** findings, append the fix plan to the message
+that carries the findings, immediately before the approval question, as text — do **not** write a
+file. The plan must:
 
 - **Summarize each finding** — one bullet per finding with severity, file, and a one-line
   description.
@@ -417,20 +419,32 @@ message as text — do **not** write a file. The plan must:
   off a guess for `dev-utils:apply-fixes` to discover.
 - **Be concise** — a fix checklist, not a restatement of the review report.
 
-End the message with this handoff line:
+Then ask for approval and continue in this session. Never end the turn with a note addressed to a
+"caller" — this skill runs inside the assistant that issued the report, and no other agent reads
+that note, so the handoff never happens:
 
-> Caller: present this plan to the user, wait for explicit approval, then invoke the
-> `dev-utils:apply-fixes` skill with this plan as `args` to apply the fixes.
+1. Call `AskUserQuestion` with one question: apply all fixes (Errors and Warnings), apply Error
+   fixes only, or skip fixes. Never apply anything before an answer arrives.
+2. An apply choice → call the `Skill` tool with `skill: dev-utils:apply-fixes` in the same turn.
+   Set `args` to the review summary, this fix plan, and a line `User approval: <chosen option>`.
+   On `Apply Error fixes only`, pass a plan with the Warning items removed. `apply-fixes` is
+   `user-invocable: false`; the `Skill` tool call is its only entry point, so waiting for the user
+   to invoke it manually means the handoff never happens.
+3. Skip, or the question is dismissed → stop. No plan file, no retry, no fix applied.
 
 Do not apply any fix here. `dev-utils:apply-fixes` owns applying approved fixes, runs forked, and
-is not user-invocable — the caller invokes it after approval.
+is not user-invocable — invoking it after approval is mandatory.
+
+Nested context: when this skill runs in a sub-agent with no direct user interaction, return the
+report, the plan, and the approval request to your caller instead of calling `AskUserQuestion` or
+`Skill`. Never invent an approval answer.
 
 No Errors or Warnings → state that and stop — no plan, no handoff.
 
 ## Writing Rules
 
-- Read-only. Writes no files, no plan file. Review summary and fix plan return as text to the
-  caller.
+- Read-only. Writes no files, no plan file. Review summary and fix plan return as text in this
+  session.
 - Never touch `$CLAUDE_CONFIG_DIR` (unset → `~/.claude`). It is the user's machine configuration,
   never review input: do not read, list, diff, or cite it — see Scope Boundary. This plugin's own
   `${CLAUDE_PLUGIN_ROOT}` files are the only exception.
@@ -439,7 +453,8 @@ No Errors or Warnings → state that and stop — no plan, no handoff.
   `bash -n`, `shellcheck`, `.claude/scripts/bwrap-pytest.sh -C <dir>` (or `uv run --project <dir>
   pytest` when `bwrap` is absent), and a project's configured linter. Never `--fix`, never a
   formatter, never any fix-up script — text-only keeps the review side-effect-free.
-- Never apply fixes. Skill stops at the handoff — `dev-utils:apply-fixes` owns approved fixes.
+- Never edit files or apply fixes. After approval, invoke `dev-utils:apply-fixes`; it owns the
+  edits.
 - Never reproduce a confidential value. Report `file:line` and type only.
 - Never dispatch more than 6 area agents, never dispatch them one at a time, and never narrow a brief
   to a "quick pass". An area agent that skips checks creates the blind spot the fan-out is for.
@@ -483,8 +498,10 @@ No Errors or Warnings → state that and stop — no plan, no handoff.
     `${CLAUDE_PLUGIN_ROOT}/references/model-capabilities.md`, and each such finding names the model
     the alias resolves to under the session's wiring.
 12. If Errors, Warnings, or a confidential-data match were found: a fix plan was returned as text
-    with concrete fixes, and the final message instructs the caller to invoke `dev-utils:apply-fixes`
-    after user approval. No plan file was written, and no confidential value was reproduced.
+    with concrete fixes, `AskUserQuestion` asked for approval, and an apply answer led to a `Skill`
+    call for `dev-utils:apply-fixes` with the plan and approval in `args` — or, in a sub-agent
+    without `AskUserQuestion`, the plan and approval request were returned to the caller. No plan
+    file was written, and no confidential value was reproduced.
 13. If `.py` files were in scope: `${CLAUDE_PLUGIN_ROOT}/references/python-review.md` was read, the
     owning project's tests were run where they exist, and each Python finding quotes tool output or
     cites a rulebook section.
@@ -510,7 +527,8 @@ No Errors or Warnings → state that and stop — no plan, no handoff.
    not obvious from the diff; no trailer by default, add only when explicitly asked.
 5. **Excluded** — each path skipped as out of scope, with the reason (e.g. resolves into
    `$CLAUDE_CONFIG_DIR` or an excluded class). Omit when nothing was excluded.
-6. **Fix plan** — only when Errors or Warnings exist: the plan from step 17, plus the handoff line.
+6. **Fix plan** — only when Errors or Warnings exist: the plan from step 17, the approval
+   question, and the `dev-utils:apply-fixes` invocation or its result.
 7. **Clean result** — no findings: confirmation the changeset is clean; no fix plan, no handoff.
 
 Summary line: number of files reviewed by class, number of findings by severity, and the review

@@ -1,6 +1,6 @@
 [project]
 name = "csv-tool"
-version = "0.6.5"
+version = "0.6.8"
 description = "CSV/TSV inspection and transform utility, stdlib-only Python."
 requires-python = ">=3.12"
 dependencies = []
